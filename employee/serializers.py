@@ -234,9 +234,54 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             user=user,
             department=department,
             manager=manager,
+            role=role,
             **validated_data,
         )
         return employee
+    
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        department_code = validated_data.pop("department_code", None)
+        manager_emp_id = validated_data.pop("manager", None)
+        role = validated_data.get("role", instance.role)
+
+        # Update Department
+        if department_code:
+            department = Department.objects.filter(
+                models.Q(code__iexact=department_code) | models.Q(name__iexact=department_code)
+            ).first()
+            if not department:
+                raise serializers.ValidationError({"department_code": f"Department '{department_code}' not found."})
+            instance.department = department
+
+        # Update Manager
+        if manager_emp_id:
+            manager = Employee.objects.filter(user__emp_id__iexact=manager_emp_id).first()
+            if not manager:
+                raise serializers.ValidationError({"manager": f"Manager '{manager_emp_id}' not found."})
+            if manager.user.role not in ["Manager", "Admin"]:
+                raise serializers.ValidationError({"manager": "Assigned manager must be Manager/Admin."})
+            instance.manager = manager
+
+        # Update User fields (first_name, last_name, email if present)
+        user = instance.user
+        if "first_name" in validated_data:
+            user.first_name = validated_data.pop("first_name")
+        if "last_name" in validated_data:
+            user.last_name = validated_data.pop("last_name")
+        if "email" in validated_data:
+            user.email = validated_data.pop("email")
+        user.role = role  # keep role synced
+        user.save()
+
+        # Update Employee fields
+        instance.role = role
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+        return instance
 
 
 # ===========================================================
