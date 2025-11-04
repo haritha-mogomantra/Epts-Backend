@@ -188,55 +188,68 @@ class ChangePasswordView(APIView):
 
     def post(self, request):
         user = request.user
-        old_password = request.data.get('old_password')
-        new_password = request.data.get('new_password')
-        confirm_password = request.data.get('confirm_password')
+        old_password = request.data.get("old_password")
+        new_password = request.data.get("new_password")
+        confirm_password = request.data.get("confirm_password")
 
-        # Check all fields are provided
-        if not old_password or not new_password or not confirm_password:
-            return Response({
-                "message": "All fields (old_password, new_password, confirm_password) are required.",
-                "status": "error"
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # 1️⃣ Validate required fields
+        if not all([old_password, new_password, confirm_password]):
+            return Response(
+                {"message": "All fields (old_password, new_password, confirm_password) are required.", "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Validate old password
+        # 2️⃣ Validate old password
         if not user.check_password(old_password):
-            return Response({
-                "message": "Old password is incorrect.",
-                "status": "error"
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Old password is incorrect.", "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Ensure new password is different from old
+        # 3️⃣ Prevent using the same password
         if old_password == new_password:
-            return Response({
-                "message": "New password cannot be the same as the old password.",
-                "status": "error"
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "New password cannot be the same as the old password.", "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Ensure new_password == confirm_password
+        # 4️⃣ Match confirmation
         if new_password != confirm_password:
-            return Response({
-                "message": "New password and confirm password do not match.",
-                "status": "error"
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "New password and confirm password do not match.", "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 5️⃣ (Optional) Password strength validation
-        pattern = r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*#?&])[A-Za-z\d@$!%*#?&]{8,}$'
+        # 5️⃣ Enforce password complexity
+        pattern = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*#?&])[A-Za-z\d@$!%*#?&]{8,}$"
         if not re.match(pattern, new_password):
-            return Response({
-                "message": "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.",
-                "status": "error"
-            }, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"message": "Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.", "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # All checks passed – update password
-        user.set_password(new_password)
-        user.save()
+        # 6️⃣ Attempt password change — catch password-reuse validation
+        try:
+            user.set_password(new_password)  # uses PasswordHistory logic in your model
+            user.force_password_change = False
+            user.save(update_fields=["password", "force_password_change"])
+        except ValidationError as ve:
+            return Response(
+                {"message": str(ve.message), "status": "error"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Password change failed for {user.emp_id}: {e}")
+            return Response(
+                {"message": "Unexpected error while changing password.", "status": "error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
-        return Response({
-            "message": "Password changed successfully!",
-            "status": "success"
-        }, status=status.HTTP_200_OK)
-
+        logger.info(f"Password changed successfully for {user.emp_id}")
+        return Response(
+            {"message": "Password changed successfully!", "status": "success"},
+            status=status.HTTP_200_OK
+        )
 # ===========================================================
 # 5. PROFILE (GET / PATCH)
 # ===========================================================

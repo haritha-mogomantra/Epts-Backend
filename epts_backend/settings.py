@@ -88,34 +88,19 @@ WSGI_APPLICATION = "epts_backend.wsgi.application"
 # -------------------------------------------------------------------
 # DATABASE CONFIGURATION
 # -------------------------------------------------------------------
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
-
-# Uncomment below for MySQL production setup
-"""
 import pymysql
 pymysql.install_as_MySQLdb()
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": os.getenv("DB_NAME", "epts_project_db"),
-        "USER": os.getenv("DB_USER", "root"),
-        "PASSWORD": os.getenv("DB_PASSWORD", ""),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "3306"),
-        "OPTIONS": {
-            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-            "charset": "utf8mb4",
-        },
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'epts_project_db',
+        'USER': 'mogomantra',
+        'PASSWORD': 'Mogo@12345',
+        'HOST': '100.93.35.95',
+        'PORT': '3306',
     }
 }
-"""
-
 # -------------------------------------------------------------------
 # CUSTOM USER MODEL
 # -------------------------------------------------------------------
