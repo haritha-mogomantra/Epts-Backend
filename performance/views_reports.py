@@ -84,3 +84,46 @@ class EmployeePerformancePDFView(generics.GenericAPIView):
         employee = get_object_or_404(Employee, user__emp_id__iexact=emp_id)
         evaluations = PerformanceEvaluation.objects.filter(employee=employee).order_by("-year", "-week_number")
         return generate_pdf_report(employee, evaluations)
+
+
+
+# ===========================================================
+# Manager-wise Weekly Performance Report
+# ===========================================================
+from rest_framework.exceptions import ValidationError
+
+class ManagerWiseWeeklyReportView(generics.ListAPIView):
+    serializer_class = PerformanceEvaluationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        manager_name = self.request.query_params.get("manager_name")
+        week = self.request.query_params.get("week")
+        year = self.request.query_params.get("year")
+
+        if not manager_name:
+            raise ValidationError({"manager_name": "Manager name is required."})
+
+        # Split full name → first and last
+        parts = manager_name.split()
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ""
+
+        # Get manager
+        manager = Employee.objects.filter(
+            user__first_name__iexact=first_name,
+            user__last_name__iexact=last_name,
+            user__role="Manager"
+        ).first()
+
+        if not manager:
+            raise ValidationError({"manager_name": f"Manager '{manager_name}' not found."})
+
+        qs = PerformanceEvaluation.objects.filter(employee__manager=manager)
+
+        if week:
+            qs = qs.filter(week_number=week)
+        if year:
+            qs = qs.filter(year=year)
+
+        return qs.order_by("-year", "-week_number")
