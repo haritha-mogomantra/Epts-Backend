@@ -71,10 +71,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user.check_password(password):
             if hasattr(user, "increment_failed_attempts"):
                 user.increment_failed_attempts()
-            if getattr(user, "account_locked", False):
+
+            # ✅ Refresh the user instance from DB to get the latest lock status
+            user.refresh_from_db(fields=["account_locked", "failed_login_attempts", "locked_at", "is_active"])
+
+            if user.account_locked:
                 raise serializers.ValidationError({
                     "detail": f"Too many failed attempts. Account locked for {self.LOCK_DURATION_HOURS} hours."
                 })
+
             remaining = max(0, self.LOCK_THRESHOLD - getattr(user, "failed_login_attempts", 0))
             raise serializers.ValidationError({"detail": f"Invalid credentials. {remaining} attempt(s) left."})
 
