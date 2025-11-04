@@ -7,7 +7,8 @@ from django.db import transaction, models
 from django.utils import timezone
 from .models import Department, Employee
 import re, csv, io, os
-from datetime import datetime
+from datetime import datetime, date
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -136,18 +137,37 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
             raise serializers.ValidationError("Last name must contain only alphabets and spaces.")
         return value.strip().title()
+    
+    def validate_dob(self, value):
+        today = date.today()
+
+        # Must not be in the future
+        if value > today:
+            raise serializers.ValidationError("Date of birth cannot be in the future.")
+
+        # Must be at least 18 years old
+        min_age_date = today.replace(year=today.year - 18)
+        if value > min_age_date:
+            raise serializers.ValidationError("Employee must be at least 18 years old.")
+
+        return value
 
     def validate_joining_date(self, value):
-        # allow date objects too
-        try:
-            jd = value
-            # If coming as string, DRF will already convert; this guard is defensive
-            if hasattr(jd, "isoformat"):
-                pass
-        except Exception:
-            pass
-        if value and value > timezone.now().date():
+        today = date.today()
+
+        # Cannot join in the future
+        if value > today:
             raise serializers.ValidationError("Joining date cannot be in the future.")
+
+        # Compare with DOB if available
+        dob = self.initial_data.get("dob") or getattr(self.instance, "dob", None)
+        if dob:
+            if isinstance(dob, str):
+                dob = date.fromisoformat(dob)
+
+            if value <= dob:
+                raise serializers.ValidationError("Joining date must be after the date of birth.")
+
         return value
 
     def validate_contact_number(self, value):
