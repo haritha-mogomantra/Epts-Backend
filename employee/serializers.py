@@ -127,6 +127,29 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             "status", "joining_date",
         ]
 
+    def validate_first_name(self, value):
+        if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
+            raise serializers.ValidationError("First name must contain only alphabets and spaces.")
+        return value.strip().title()
+
+    def validate_last_name(self, value):
+        if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
+            raise serializers.ValidationError("Last name must contain only alphabets and spaces.")
+        return value.strip().title()
+
+    def validate_joining_date(self, value):
+        # allow date objects too
+        try:
+            jd = value
+            # If coming as string, DRF will already convert; this guard is defensive
+            if hasattr(jd, "isoformat"):
+                pass
+        except Exception:
+            pass
+        if value and value > timezone.now().date():
+            raise serializers.ValidationError("Joining date cannot be in the future.")
+        return value
+
     def validate_contact_number(self, value):
         if not value:
             return value
@@ -139,6 +162,25 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if qs.exists():
             raise serializers.ValidationError("This contact number is already used.")
         return value
+    
+
+    def validate(self, attrs):
+        # department_code must be present for creation
+        if self.instance is None and not attrs.get("department_code"):
+            raise serializers.ValidationError({"department_code": "Department code is required."})
+
+        # Ensure contact_number is a string (not int) if provided
+        contact = attrs.get("contact_number")
+        if contact is not None and not isinstance(contact, str):
+            raise serializers.ValidationError({"contact_number": "Contact number must be a string."})
+
+        # Status must be a valid choice string
+        status_val = attrs.get("status")
+        if status_val is not None and status_val not in ["Active", "Inactive", "On Leave"]:
+            raise serializers.ValidationError({"status": "Invalid status. Use: Active / Inactive / On Leave."})
+
+        return attrs
+
 
     @transaction.atomic
     def create(self, validated_data):
@@ -149,29 +191,37 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         last_name = validated_data.pop("last_name")
         role = validated_data.pop("role")
 
-        department = None
-        if dept_code:
-            department = Department.objects.filter(
-                models.Q(id__iexact=dept_code)
-                | models.Q(code__iexact=dept_code)
-                | models.Q(name__iexact=dept_code)
-            ).first()
-            if not department:
-                raise serializers.ValidationError({"department_code": f"Department '{dept_code}' not found."})
-            if not department.is_active:
-                raise serializers.ValidationError({"department_code": f"Department '{dept_code}' is inactive."})
+        # Validate role explicitly
+        if role not in ["Admin", "Manager", "Employee"]:
+            raise serializers.ValidationError({"role": f"Invalid role '{role}'."})
 
+        # Department is required for Employee creation
+        if not dept_code:
+            raise serializers.ValidationError({"department_code": "Department code is required."})
+
+        department = Department.objects.filter(
+            models.Q(code__iexact=dept_code) | models.Q(name__iexact=dept_code) | models.Q(id__iexact=dept_code)
+        ).first()
+        if not department:
+            raise serializers.ValidationError({"department_code": f"Department '{dept_code}' not found."})
+        if not department.is_active:
+            raise serializers.ValidationError({"department_code": f"Department '{dept_code}' is inactive."})
+
+        # Manager validation
         manager = None
         if manager_emp_id:
             manager = Employee.objects.filter(user__emp_id__iexact=manager_emp_id).first()
             if not manager:
                 raise serializers.ValidationError({"manager": f"Manager '{manager_emp_id}' not found."})
-            if manager.user.role not in ["Manager", "Admin"]:
-                raise serializers.ValidationError({"manager": f"Assigned manager must be Manager/Admin."})
+            mgr_role = getattr(manager.user, "role", None)
+            if mgr_role not in ["Manager", "Admin"]:
+                raise serializers.ValidationError({"manager": "Assigned manager must have role 'Manager' or 'Admin'."})
 
+        # Email uniqueness
         if User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError({"email": "User with this email already exists."})
 
+        # Create user and employee
         user = User.objects.create_user(
             email=email,
             first_name=first_name,
