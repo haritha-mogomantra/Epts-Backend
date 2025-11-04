@@ -158,7 +158,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_object(self):
-        emp_id = self.kwargs.get("emp_id")
+        emp_id = self.kwargs.get(self.lookup_field)
         try:
             employee = Employee.objects.select_related("user", "department", "manager").get(user__emp_id__iexact=emp_id)
             if employee.is_deleted:
