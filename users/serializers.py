@@ -35,7 +35,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     LOCK_THRESHOLD = 5
 
     def validate(self, attrs):
-        login_input = attrs.get("username")
+        """
+        Enhanced login validation supporting username, emp_id, or email.
+        Handles lockout, failed attempts, and JWT token creation.
+        """
+        login_input = attrs.get("username")  # DRF-SimpleJWT always passes username key
         password = attrs.get("password")
 
         if not login_input or not password:
@@ -43,7 +47,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 {"detail": "Both username (emp_id/username/email) and password are required."}
             )
 
-        # Match by username / emp_id / email
+        # 🔍 Try to match user by username OR emp_id OR email
         user = User.objects.filter(
             models.Q(username__iexact=login_input)
             | models.Q(emp_id__iexact=login_input)
@@ -53,7 +57,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user:
             raise serializers.ValidationError({"detail": "Invalid username or password."})
 
-        # Account lock check
+        # 🔒 Account lock validation
         if getattr(user, "account_locked", False):
             if getattr(user, "locked_at", None):
                 elapsed = timezone.now() - user.locked_at
@@ -67,12 +71,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     if hasattr(user, "unlock_account"):
                         user.unlock_account()
 
-        # Validate password
+        # 🔐 Password validation
         if not user.check_password(password):
             if hasattr(user, "increment_failed_attempts"):
                 user.increment_failed_attempts()
 
-            # ✅ Refresh the user instance from DB to get the latest lock status
+            # Refresh DB state after increment
             user.refresh_from_db(fields=["account_locked", "failed_login_attempts", "locked_at", "is_active"])
 
             if user.account_locked:
@@ -83,9 +87,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             remaining = max(0, self.LOCK_THRESHOLD - getattr(user, "failed_login_attempts", 0))
             raise serializers.ValidationError({"detail": f"Invalid credentials. {remaining} attempt(s) left."})
 
-        # Reset failed login attempts
+        # ✅ Success: Reset failed attempts and unlock if needed
         if hasattr(user, "reset_login_attempts"):
             user.reset_login_attempts()
+        else:
+            user.failed_login_attempts = 0
+            user.account_locked = False
+            user.locked_at = None
+            user.save(update_fields=["failed_login_attempts", "account_locked", "locked_at"])
 
         if getattr(user, "force_password_change", False):
             raise serializers.ValidationError({
@@ -93,7 +102,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "detail": "Password change required before login."
             })
 
-        # JWT creation
+        # 🕒 Update last login
+        user.last_login = timezone.now()
+        user.save(update_fields=["last_login"])
+
+        # 🪪 Generate JWT tokens
         refresh = self.get_token(user)
         access = refresh.access_token
 
