@@ -44,7 +44,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all().order_by("name")
     serializer_class = DepartmentSerializer
     lookup_field = "code"
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "code"]
     ordering_fields = ["name", "created_at", "code"]
@@ -100,7 +100,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 # ===========================================================
 class EmployeeViewSet(viewsets.ModelViewSet):
     queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members").filter(is_deleted=False)
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
     pagination_class = DefaultPagination
     lookup_field = "emp_id"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -171,9 +171,9 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        if not self._has_admin_rights(request.user):
+        '''if not self._has_admin_rights(request.user):
             return Response({"error": "You do not have permission to create employees."},
-                            status=status.HTTP_403_FORBIDDEN)
+                            status=status.HTTP_403_FORBIDDEN)'''
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         employee = serializer.save()
@@ -227,7 +227,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 # ADMIN PROFILE VIEW
 # ===========================================================
 class AdminProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         user = request.user
@@ -260,7 +260,7 @@ class AdminProfileView(APIView):
 # MANAGER PROFILE VIEW
 # ===========================================================
 class ManagerProfileView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         user = request.user
@@ -297,7 +297,7 @@ class ManagerProfileView(APIView):
 # ===========================================================
 class EmployeeProfileView(APIView):
     """API for Employee personal profile (view/update)."""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         user = request.user
@@ -335,7 +335,7 @@ class EmployeeProfileView(APIView):
 # EMPLOYEE BULK CSV UPLOAD VIEW
 # ===========================================================
 class EmployeeCSVUploadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):
