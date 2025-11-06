@@ -4,6 +4,7 @@
 
 from rest_framework import viewsets, status, permissions, filters
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
@@ -221,8 +222,23 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         logger.warning(f"Employee '{employee.user.emp_id}' soft-deleted by {user.username}")
         return Response({"message": f"🗑️ Employee '{employee.user.emp_id}' deleted successfully."},
                         status=status.HTTP_200_OK)
+    
 
+    @action(detail=False, methods=["GET"], url_path="managers")
+    def list_managers(self, request):
+        managers = (
+            self.get_queryset()
+            .filter(user__role="Manager", is_deleted=False)
+            .select_related("user")
+        )
 
+        return Response([
+            {
+                "emp_id": emp.emp_id,
+                "full_name": f"{emp.user.first_name} {emp.user.last_name}".strip()
+            }
+            for emp in managers
+        ])
 # ===========================================================
 # ADMIN PROFILE VIEW
 # ===========================================================
@@ -339,9 +355,9 @@ class EmployeeCSVUploadView(APIView):
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):
-        if not (request.user.is_superuser or getattr(request.user, "role", "") == "Admin"):
+        '''if not (request.user.is_superuser or getattr(request.user, "role", "") == "Admin"):
             return Response({"error": "Only Admins can upload employee CSV files."},
-                            status=status.HTTP_403_FORBIDDEN)
+                            status=status.HTTP_403_FORBIDDEN)'''
 
         serializer = EmployeeCSVUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

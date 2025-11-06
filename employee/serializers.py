@@ -91,13 +91,14 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "id", "user", "emp_id", "full_name", "email", "contact_number",
             "department", "department_name", "department_code",
             "role", "manager", "manager_name", "designation",
+            "project_name",   # ✅ ADDED
             "status", "joining_date", "team_size",
             "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
 
     def get_full_name(self, obj):
-        return f"{obj.user.first_name or ''} {obj.user.last_name or ''}".strip()
+        return f"{obj.user.first_name} {obj.user.last_name}".strip()
 
     def get_manager_name(self, obj):
         if obj.manager and hasattr(obj.manager, "user"):
@@ -124,7 +125,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         model = Employee
         fields = [
             "id", "email", "emp_id", "first_name", "last_name", "role",
-            "contact_number", "department_code", "manager", "designation",
+            "contact_number", "department_code", "manager", "designation", "project_name",
             "status", "joining_date",
         ]
 
@@ -227,14 +228,13 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if not department.is_active:
             raise serializers.ValidationError({"department_code": f"Department '{dept_code}' is inactive."})
 
-        # Manager validation
+        # Manager validation (allow empty manager)
         manager = None
-        if manager_emp_id:
+        if manager_emp_id and manager_emp_id.strip():
             manager = Employee.objects.filter(user__emp_id__iexact=manager_emp_id).first()
             if not manager:
                 raise serializers.ValidationError({"manager": f"Manager '{manager_emp_id}' not found."})
-            mgr_role = getattr(manager.user, "role", None)
-            if mgr_role not in ["Manager", "Admin"]:
+            if manager.user.role not in ["Manager", "Admin"]:
                 raise serializers.ValidationError({"manager": "Assigned manager must have role 'Manager' or 'Admin'."})
 
         # Email uniqueness
@@ -247,8 +247,12 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             first_name=first_name,
             last_name=last_name,
             role=role,
-            department=department,
         )
+
+        # Assign department to User BEFORE creating Employee
+        user.department = department
+        user.save(update_fields=["department"])
+
 
         employee = Employee.objects.create(
             user=user,
@@ -276,7 +280,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             instance.department = department
 
         # Update Manager
-        if manager_emp_id:
+        if manager_emp_id and manager_emp_id.strip():
             manager = Employee.objects.filter(user__emp_id__iexact=manager_emp_id).first()
             if not manager:
                 raise serializers.ValidationError({"manager": f"Manager '{manager_emp_id}' not found."})
@@ -476,71 +480,99 @@ class EmployeeCSVUploadSerializer(serializers.Serializer):
         io_string = io.StringIO(decoded_file)
         reader = csv.DictReader(io_string)
 
-        required_cols = ["Emp Id", "First Name", "Last Name", "Email", "Dept Code", "Role", "Joining Date"]
-        if not all(col in reader.fieldnames for col in required_cols):
+        # Convert headers to normalized case-insensitive unified names
+        normalized_rows = []
+        for row in reader:
+            fixed_row = {}
+            for key, value in row.items():
+                key_clean = key.strip().lower().replace("_", " ").title()
+                fixed_row[key_clean] = value.strip()
+            normalized_rows.append(fixed_row)
+
+        if not normalized_rows:
+            raise serializers.ValidationError({"error": "CSV is empty."})
+
+        # ✅ Ensure correct required headers
+        required_cols = ["First Name", "Last Name", "Email", "Department Code", "Role", "Joining Date"]
+        missing = [col for col in required_cols if col not in normalized_rows[0]]
+        if missing:
             raise serializers.ValidationError({"error": f"CSV must contain: {', '.join(required_cols)}"})
 
         success_count, errors = 0, []
 
         with transaction.atomic():
-            for i, row in enumerate(reader, start=2):
-                emp_id = row.get("Emp Id", "").strip()
-                email = row.get("Email", "").strip().lower()
-                dept_code = row.get("Dept Code", "").strip()
-                first_name = row.get("First Name", "").strip()
-                last_name = row.get("Last Name", "").strip()
-                role = row.get("Role", "").strip().capitalize()
-                joining_date = row.get("Joining Date", "").strip()
+            for i, row in enumerate(normalized_rows, start=2):
 
-                if not (emp_id and email and dept_code and role):
+                email = row.get("Email", "").lower()
+                dept_code = row.get("Department Code")
+                first_name = row.get("First Name")
+                last_name = row.get("Last Name")
+                role = row.get("Role", "").capitalize()
+                joining_date = row.get("Joining Date")
+
+                contact_number = row.get("Contact Number") or None
+                designation = row.get("Designation") or None
+                manager_emp_id = row.get("Manager") or None
+                project_name = row.get("Project Name") or None   # ✅ New Column Support
+
+                if not (email and dept_code and role and first_name and last_name and joining_date):
                     errors.append(f"Row {i}: Missing mandatory fields.")
-                    continue
-
-                if Employee.objects.filter(user__emp_id__iexact=emp_id).exists():
-                    errors.append(f"Row {i}: Employee ID '{emp_id}' already exists.")
                     continue
 
                 if User.objects.filter(email__iexact=email).exists():
                     errors.append(f"Row {i}: Email '{email}' already exists.")
                     continue
 
-                department = Department.objects.filter(code__iexact=dept_code).first()
+                department = Department.objects.filter(
+                    models.Q(code__iexact=dept_code) |
+                    models.Q(name__iexact=dept_code) |
+                    models.Q(id__iexact=dept_code)
+                ).first()
                 if not department:
                     errors.append(f"Row {i}: Department '{dept_code}' not found.")
                     continue
 
-                if role not in ["Admin", "Manager", "Employee"]:
+                if role not in ["Manager", "Employee", "Admin"]:
                     errors.append(f"Row {i}: Invalid role '{role}'.")
                     continue
 
                 try:
-                    user = User.objects.create_user(
-                        email=email,
-                        first_name=first_name,
-                        last_name=last_name,
-                        role=role,
-                        department=department,
-                    )
-                    user.emp_id = emp_id
-                    user.set_password("Default@123")
-                    user.save()
+                    joining_date = datetime.strptime(joining_date, "%Y-%m-%d").date()
+                except:
+                    errors.append(f"Row {i}: Joining Date must be YYYY-MM-DD")
+                    continue
 
-                    join_date = None
-                    if joining_date:
-                        try:
-                            join_date = datetime.strptime(joining_date, "%Y-%m-%d").date()
-                        except ValueError:
-                            pass
+                manager = None
+                if manager_emp_id:
+                    manager = Employee.objects.filter(user__emp_id__iexact=manager_emp_id).first()
+                    if not manager:
+                        errors.append(f"Row {i}: Manager '{manager_emp_id}' not found.")
+                        continue
+                    if manager.user.role not in ["Manager", "Admin"]:
+                        errors.append(f"Row {i}: Assigned manager must be Manager/Admin.")
+                        continue
 
-                    Employee.objects.create(
-                        user=user,
-                        department=department,
-                        joining_date=join_date or None,
-                        status="Active",
-                    )
-                    success_count += 1
+                user = User.objects.create_user(
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    role=role,
+                    department=department,
+                )
 
-                except Exception as e:
-                    errors.append(f"Row {i}: {str(e)}")
+                # ✅ Project Name included here
+                Employee.objects.create(
+                    user=user,
+                    department=department,
+                    manager=manager,
+                    designation=designation,
+                    project_name=project_name,   # ✅ Added field
+                    contact_number=contact_number,
+                    joining_date=joining_date,
+                    role=role,
+                    status="Active",
+                )
+
+                success_count += 1
 
         return {"success_count": success_count, "errors": errors}
