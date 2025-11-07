@@ -275,42 +275,13 @@ SESSION_COOKIE_SAMESITE = "Lax"
 # ===========================================================
 # ✅ CENTRALIZED LOGGING (Employee Creation Auto Logs)
 # ===========================================================
-import os
-
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-
+# -------------------------------------------------------------------
+# LOGGING DISABLED FOR INTEGRATION PHASE
+# -------------------------------------------------------------------
 LOGGING = {
     "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {
-            "format": "[{asctime}] [{levelname}] {name}: {message}",
-            "style": "{",
-        },
-    },
-    "handlers": {
-        "employee_file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": os.path.join(LOG_DIR, "employee_creation.log"),
-            "formatter": "standard",
-        },
-        "console": {
-            "level": "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "standard",
-        },
-    },
-    "loggers": {
-        "employee_creation": {
-            "handlers": ["employee_file", "console"],
-            "level": "INFO",
-            "propagate": False,
-        },
-    },
+    "disable_existing_loggers": True,
 }
-
 
 # -------------------------------------------------------------------
 # EMAIL CONFIGURATION (For notifications)

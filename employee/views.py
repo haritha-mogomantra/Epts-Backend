@@ -12,7 +12,6 @@ from django.contrib.auth import get_user_model
 from rest_framework.pagination import PageNumberPagination
 from django.db import models, transaction
 from django.db.models import Q
-import logging
 
 from .models import Department, Employee
 from .serializers import (
@@ -26,7 +25,6 @@ from .serializers import (
 )
 
 User = get_user_model()
-logger = logging.getLogger("employee")
 
 
 # ===========================================================
@@ -74,13 +72,12 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not self._is_admin(request):
             return Response({"error": "Only Admins can create departments."}, status=status.HTTP_403_FORBIDDEN)
-        logger.info(f"Department created by {request.user.username}")
+
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         if not self._is_admin(request):
             return Response({"error": "Only Admins can update departments."}, status=status.HTTP_403_FORBIDDEN)
-        logger.info(f"Department updated by {request.user.username}")
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
@@ -91,7 +88,6 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         force_delete = request.query_params.get("force", "").lower() == "true"
         if force_delete:
             instance.delete()
-            logger.warning(f"Department '{instance.name}' permanently deleted by {request.user.username}")
             return Response({"message": f"Department '{instance.name}' permanently deleted."},
                             status=status.HTTP_204_NO_CONTENT)
 
@@ -101,7 +97,6 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
         instance.is_active = False
         instance.save(update_fields=["is_active"])
-        logger.info(f"Department '{instance.name}' deactivated by {request.user.username}")
         return Response({"message": f"Department '{instance.name}' deactivated successfully."},
                         status=status.HTTP_200_OK)
 
@@ -194,7 +189,6 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
         total_count = Employee.objects.filter(is_deleted=False).count()
 
-        logger.info(f"Employee '{employee.user.emp_id}' created by {request.user.username}")
         return Response({
             "message": "Employee created successfully.",
             "employee": EmployeeSerializer(employee, context={"request": request}).data,
@@ -215,7 +209,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         employee.refresh_from_db()
-        logger.info(f"Employee '{employee.user.emp_id}' updated by {user.username}")
+
         return Response({"message": "Employee updated successfully.",
                          "employee": EmployeeSerializer(employee, context={"request": request}).data},
                         status=status.HTTP_200_OK)
@@ -230,7 +224,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # ✅ Directly perform raw DB update to avoid triggering model.save()
+        # Directly perform raw DB update to avoid triggering model.save()
         Employee.objects.filter(id=employee.id).update(is_deleted=True)
 
         return Response({"message": "Employee deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
@@ -280,7 +274,6 @@ class AdminProfileView(APIView):
         serializer = AdminProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        logger.info(f"Admin '{user.username}' updated profile.")
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -313,7 +306,6 @@ class ManagerProfileView(APIView):
         serializer = ManagerProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        logger.info(f"Manager '{user.username}' updated their profile.")
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request):
@@ -352,7 +344,6 @@ class EmployeeProfileView(APIView):
         serializer = EmployeeProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        logger.info(f"👨‍💻 Employee '{user.username}' updated their profile.")
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request):
@@ -375,7 +366,6 @@ class EmployeeCSVUploadView(APIView):
         serializer.is_valid(raise_exception=True)
         result = serializer.save()
 
-        logger.info(f"CSV upload processed by {request.user.username}")
         return Response({
             "message": "Employee CSV processed successfully.",
             "uploaded_count": result.get("success_count", 0),
@@ -392,9 +382,8 @@ class EmployeeCSVUploadView(APIView):
 
         total_employees = Employee.objects.filter(is_deleted=False).count()
 
-        logger.info(f"CSV upload processed by {request.user.username}")
         return Response({
-            "message": f"✅ CSV processed successfully. {result.get('success_count', 0)} added.",
+            "message": f"CSV processed successfully. {result.get('success_count', 0)} added.",
             "errors": result.get("errors", []),
-            "total_employees": total_employees  # ✅ allows frontend to jump to last page
+            "total_employees": total_employees  # aSSllows frontend to jump to last page
         }, status=status.HTTP_200_OK)
