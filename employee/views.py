@@ -37,6 +37,16 @@ class DefaultPagination(PageNumberPagination):
     page_size_query_param = "page_size"
     max_page_size = 100
 
+    def get_paginated_response(self, data):
+        return Response({
+            "count": self.page.paginator.count,
+            "next": self.get_next_link(),
+            "previous": self.get_previous_link(),
+            "current_page": self.page.number,
+            "total_pages": self.page.paginator.num_pages,
+            "results": data
+        })
+
 
 # ===========================================================
 # DEPARTMENT VIEWSET
@@ -103,7 +113,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members").filter(is_deleted=False)
     permission_classes = [permissions.AllowAny]
     pagination_class = DefaultPagination
-    lookup_field = "emp_id"
+    lookup_field = "user__emp_id"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["status"]
     search_fields = [
@@ -157,11 +167,16 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status__iexact=status_param.strip())
 
         return qs
+ 
 
     def get_object(self):
-        emp_id = self.kwargs.get(self.lookup_field)
+        emp_id = self.kwargs.get("user__emp_id")
         try:
-            employee = Employee.objects.select_related("user", "department", "manager").get(user__emp_id__iexact=emp_id)
+            employee = (
+                Employee.objects
+                .select_related("user", "department", "manager")
+                .get(user__emp_id__iexact=emp_id)
+            )
             if employee.is_deleted:
                 raise ValidationError("This employee has been deleted. No further actions allowed.")
             return employee
@@ -172,17 +187,19 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        '''if not self._has_admin_rights(request.user):
-            return Response({"error": "You do not have permission to create employees."},
-                            status=status.HTTP_403_FORBIDDEN)'''
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         employee = serializer.save()
         employee.refresh_from_db()
-        logger.info(f"👤 Employee '{employee.user.emp_id}' created by {request.user.username}")
-        return Response({"message": "Employee created successfully.",
-                         "employee": EmployeeSerializer(employee, context={"request": request}).data},
-                        status=status.HTTP_201_CREATED)
+
+        total_count = Employee.objects.filter(is_deleted=False).count()
+
+        logger.info(f"Employee '{employee.user.emp_id}' created by {request.user.username}")
+        return Response({
+            "message": "Employee created successfully.",
+            "employee": EmployeeSerializer(employee, context={"request": request}).data,
+            "total_employees": total_count  
+        }, status=status.HTTP_201_CREATED)
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
@@ -205,32 +222,27 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        employee = self.get_object()
-        user = request.user
+        emp_id = kwargs.get("user__emp_id")
 
-        if employee.is_deleted:
-            return Response({"error": "This employee is already deleted."},
-                            status=status.HTTP_400_BAD_REQUEST)
-        if getattr(employee.user, "role", "") in ["Admin", "Manager"]:
-            return Response({"error": "Cannot delete Admin or Manager accounts."},
-                            status=status.HTTP_403_FORBIDDEN)
-        if not self._has_admin_rights(user):
-            return Response({"error": "You do not have permission to delete employees."},
-                            status=status.HTTP_403_FORBIDDEN)
+        try:
+            # ✅ Fetch even if model has custom validation
+            employee = Employee.objects.select_related("user").get(user__emp_id=emp_id, is_deleted=False)
+        except Employee.DoesNotExist:
+            return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        employee.soft_delete()
-        logger.warning(f"Employee '{employee.user.emp_id}' soft-deleted by {user.username}")
-        return Response({"message": f"🗑️ Employee '{employee.user.emp_id}' deleted successfully."},
-                        status=status.HTTP_200_OK)
-    
+        # ✅ Directly perform raw DB update to avoid triggering model.save()
+        Employee.objects.filter(id=employee.id).update(is_deleted=True)
+
+        return Response({"message": "Employee deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
 
     @action(detail=False, methods=["GET"], url_path="managers")
     def list_managers(self, request):
-        managers = (
-            self.get_queryset()
-            .filter(user__role="Manager", is_deleted=False)
-            .select_related("user")
-        )
+        managers = Employee.objects.select_related("user").filter(
+            Q(user__role__in=["Manager", "Admin"]),
+            is_deleted=False,
+            status="Active"
+        ).order_by("user__first_name")
 
         return Response([
             {
@@ -238,7 +250,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 "full_name": f"{emp.user.first_name} {emp.user.last_name}".strip()
             }
             for emp in managers
-        ])
+        ], status=status.HTTP_200_OK)
 # ===========================================================
 # ADMIN PROFILE VIEW
 # ===========================================================
@@ -355,9 +367,9 @@ class EmployeeCSVUploadView(APIView):
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):
-        '''if not (request.user.is_superuser or getattr(request.user, "role", "") == "Admin"):
-            return Response({"error": "Only Admins can upload employee CSV files."},
-                            status=status.HTTP_403_FORBIDDEN)'''
+            #if not (request.user.is_superuser or getattr(request.user, "role", "") == "Admin"):
+                #return Response({"error": "Only Admins can upload employee CSV files."},
+                            #status=status.HTTP_403_FORBIDDEN)
 
         serializer = EmployeeCSVUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -369,3 +381,20 @@ class EmployeeCSVUploadView(APIView):
             "uploaded_count": result.get("success_count", 0),
             "errors": result.get("errors", []),
         }, status=status.HTTP_201_CREATED)
+    
+
+    @action(detail=False, methods=["POST"], url_path="upload_csv")
+    @transaction.atomic
+    def upload_csv(self, request):
+        serializer = EmployeeCSVUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = serializer.save()
+
+        total_employees = Employee.objects.filter(is_deleted=False).count()
+
+        logger.info(f"CSV upload processed by {request.user.username}")
+        return Response({
+            "message": f"✅ CSV processed successfully. {result.get('success_count', 0)} added.",
+            "errors": result.get("errors", []),
+            "total_employees": total_employees  # ✅ allows frontend to jump to last page
+        }, status=status.HTTP_200_OK)
