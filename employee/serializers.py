@@ -173,6 +173,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
 # ===========================================================
 # EMPLOYEE CREATE / UPDATE SERIALIZER
 # ===========================================================
+
 class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(write_only=True)
     first_name = serializers.CharField(write_only=True)
@@ -181,6 +182,12 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     department_code = serializers.CharField(write_only=True, required=False)
     manager = serializers.CharField(write_only=True, required=False, allow_blank=True)
     emp_id = serializers.ReadOnlyField(source="user.emp_id")
+
+    # ✅ Allow multiple joining_date input formats (handles all business cases)
+    joining_date = serializers.DateField(
+        input_formats=["%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"],
+        required=True
+    )
 
     class Meta:
         model = Employee
@@ -199,15 +206,13 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
             raise serializers.ValidationError("Last name must contain only alphabets and spaces.")
         return value.strip().title()
-    
+
     def validate_dob(self, value):
         today = date.today()
 
-        # Must not be in the future
         if value > today:
             raise serializers.ValidationError("Date of birth cannot be in the future.")
 
-        # Must be at least 18 years old
         min_age_date = today.replace(year=today.year - 18)
         if value > min_age_date:
             raise serializers.ValidationError("Employee must be at least 18 years old.")
@@ -217,15 +222,19 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     def validate_joining_date(self, value):
         today = date.today()
 
-        # Cannot join in the future
         if value > today:
             raise serializers.ValidationError("Joining date cannot be in the future.")
 
-        # Compare with DOB if available
         dob = self.initial_data.get("dob") or getattr(self.instance, "dob", None)
         if dob:
             if isinstance(dob, str):
-                dob = date.fromisoformat(dob)
+                try:
+                    dob = datetime.strptime(dob, "%Y-%m-%d").date()
+                except ValueError:
+                    try:
+                        dob = datetime.strptime(dob, "%d-%m-%Y").date()
+                    except ValueError:
+                        raise serializers.ValidationError("Date of birth must be valid (YYYY-MM-DD or DD-MM-YYYY).")
 
             if value <= dob:
                 raise serializers.ValidationError("Joining date must be after the date of birth.")
@@ -244,17 +253,8 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if qs.exists():
             raise serializers.ValidationError("This contact number is already used.")
         return value
-    
 
     def validate(self, attrs):
-        """
-        Extended validation for mandatory fields, duplicates,
-        department checks, and joining date.
-        """
-
-        # ===============================
-        # 1️⃣ Mandatory Field Validation
-        # ===============================
         mandatory_fields = ["first_name", "last_name", "email", "role", "department_code", "joining_date"]
         missing = [f for f in mandatory_fields if not attrs.get(f)]
         if missing:
@@ -262,9 +262,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
                 "error": f"Missing mandatory fields: {', '.join(missing)}"
             })
 
-        # ===============================
-        # 2️⃣ Department Validation
-        # ===============================
         dept_code = attrs.get("department_code")
         department = None
         if dept_code:
@@ -284,19 +281,12 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if self.instance is None and not attrs.get("department_code"):
             raise serializers.ValidationError({"department_code": "Department code is required for new employees."})
 
-
-        # ===============================
-        # 3️⃣ Email Uniqueness Check
-        # ===============================
         email = attrs.get("email")
         if email and User.objects.filter(email__iexact=email).exclude(id=getattr(self.instance, "user_id", None)).exists():
             raise serializers.ValidationError({
                 "email": f"User with email '{email}' already exists."
             })
 
-        # ===============================
-        # 4️⃣ Duplicate Employee Name+Dept
-        # ===============================
         first_name = (attrs.get("first_name") or "").strip()
         last_name = (attrs.get("last_name") or "").strip()
 
@@ -312,7 +302,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
 
         return attrs
 
-
     @transaction.atomic
     def create(self, validated_data):
         dept_code = validated_data.pop("department_code", None)
@@ -322,11 +311,9 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         last_name = validated_data.pop("last_name").strip().title()
         role = validated_data.pop("role")
 
-        # Validate role explicitly
         if role not in ["Admin", "Manager", "Employee"]:
             raise serializers.ValidationError({"role": f"Invalid role '{role}'."})
 
-        # Department validation
         if not dept_code:
             raise serializers.ValidationError({"department_code": "Department code is required."})
 
@@ -336,9 +323,8 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if not department:
             raise serializers.ValidationError({"department_code": f"Department '{dept_code}' not found."})
         if not department.is_active:
-            raise serializers.ValidationError({"department_code": f"Department '{dept_code}' is inactive."})
+            raise serializers.ValidationError({"department_code": f"Department '{department.name}' is inactive."})
 
-        # Manager validation (allow empty manager)
         if manager_emp_id in ["", None, "None", "null"]:
             manager_emp_id = None
 
@@ -348,7 +334,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             if not manager or not getattr(manager.user, "role", None) in ["Manager", "Admin"]:
                 raise serializers.ValidationError({"manager": "Assigned manager must have role 'Manager' or 'Admin'."})
 
-        # Create user
         user = User.objects.create_user(
             email=email,
             first_name=first_name,
@@ -356,7 +341,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             role=role,
             department=department,
         )
-
 
         employee = Employee.objects.create(
             user=user,
@@ -366,7 +350,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             **validated_data,
         )
         return employee
-    
 
     @transaction.atomic
     def update(self, instance, validated_data):
@@ -374,7 +357,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         manager_emp_id = validated_data.pop("manager", None)
         role = validated_data.get("role", instance.role)
 
-        # Update Department
         if department_code:
             department = Department.objects.filter(
                 models.Q(code__iexact=department_code) | models.Q(name__iexact=department_code)
@@ -383,26 +365,18 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"department_code": f"Department '{department_code}' not found."})
             instance.department = department
 
-        # Update Manager
         if manager_emp_id and manager_emp_id.strip():
             from django.db.models import Q
 
             name = manager_emp_id.strip()
-            manager = None
-
-            # 🔹 1. Try lookup by emp_id first
             manager = Employee.objects.filter(user__emp_id__iexact=name, is_deleted=False).first()
 
-            # 🔹 2. If not found, try flexible name-based search
             if not manager:
                 name_parts = name.split()
-
                 if len(name_parts) >= 2:
-                    first_part = name_parts[0]
-                    last_part = name_parts[-1]
                     manager = Employee.objects.filter(
-                        Q(user__first_name__icontains=first_part) &
-                        Q(user__last_name__icontains=last_part),
+                        Q(user__first_name__icontains=name_parts[0]) &
+                        Q(user__last_name__icontains=name_parts[-1]),
                         is_deleted=False
                     ).first()
                 else:
@@ -419,7 +393,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
 
             instance.manager = manager
 
-        # Update User fields (first_name, last_name, email if present)
         user = instance.user
         if "first_name" in validated_data:
             user.first_name = validated_data.pop("first_name")
@@ -427,14 +400,12 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             user.last_name = validated_data.pop("last_name")
         if "email" in validated_data:
             user.email = validated_data.pop("email")
-        user.role = role  # keep role synced
+        user.role = role
         user.save()
 
-        # Update Employee fields
         instance.role = role
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-
         instance.save()
         return instance
 
@@ -447,10 +418,9 @@ def validate_image_file(value):
         ext = os.path.splitext(value.name)[1].lower()
         if ext not in [".jpg", ".jpeg", ".png"]:
             raise serializers.ValidationError("Only JPG and PNG images are allowed.")
-        if value.size > 2 * 1024 * 1024:  # 2MB limit
+        if value.size > 2 * 1024 * 1024:
             raise serializers.ValidationError("Profile picture size must not exceed 2MB.")
     return value
-
 
 # ===========================================================
 # ADMIN PROFILE SERIALIZER
