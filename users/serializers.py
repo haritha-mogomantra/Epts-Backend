@@ -96,11 +96,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             user.locked_at = None
             user.save(update_fields=["failed_login_attempts", "account_locked", "locked_at"])
 
-        if getattr(user, "force_password_change", False):
-            raise serializers.ValidationError({
-                "force_password_change": True,
-                "detail": "Password change required before login."
-            })
+        #if getattr(user, "force_password_change", False):
+            #raise serializers.ValidationError({
+                #"force_password_change": True,
+                #"detail": "Password change required before login."
+            #})
 
         # 🕒 Update last login
         user.last_login = timezone.now()

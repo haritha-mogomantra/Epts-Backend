@@ -58,17 +58,27 @@ class ObtainTokenPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception as e:
-            return Response({"detail": str(e), "status": "failed"}, status=400)
+            # If serializer raised ValidationError, DRF already formatted it
+            return Response(
+                {"success": False, "message": "Invalid credentials or account locked.", "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+        data = serializer.validated_data
+        user_data = data.get("user", {})
+
+        
         return Response(
             {
-                "refresh": serializer.validated_data.get("refresh"),
-                "access": serializer.validated_data.get("access"),
-                "user": serializer.validated_data.get("user"),
-                "status": "success",
+                "success": True,
+                "token": data.get("access"),      # access token
+                "refresh": data.get("refresh"),   # refresh token
+                "role": user_data.get("role"),
+                "username": user_data.get("username"),
+                "emp_id": user_data.get("emp_id"),
                 "message": "Login successful.",
             },
-            status=200,
+            status=status.HTTP_200_OK,
         )
 
 

@@ -205,7 +205,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     failed_login_attempts = models.PositiveIntegerField(default=0)
     account_locked = models.BooleanField(default=False)
     locked_at = models.DateTimeField(null=True, blank=True)
-    force_password_change = models.BooleanField(default=True)
+    force_password_change = models.BooleanField(default=False)
 
     # ---------- DJANGO FLAGS ----------
     is_active = models.BooleanField(default=True)
