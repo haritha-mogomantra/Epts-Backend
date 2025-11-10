@@ -464,8 +464,9 @@ class RegeneratePasswordSerializer(serializers.Serializer):
 
         # set password and force password change
         user.set_password(new_password)
+        user.temp_password = new_password
         user.force_password_change = True
-        user.save(update_fields=["password", "force_password_change"])
+        user.save(update_fields=["password", "temp_password", "force_password_change"])
 
         # Attempt to send email; if fails (or not configured), fallback to logging/console
         mail_sent = False
@@ -508,13 +509,14 @@ class RegeneratePasswordSerializer(serializers.Serializer):
     
 
 # ===========================================================
-# 5. ADMIN LOGIN DETAILS SERIALIZER
+# 5. ADMIN LOGIN DETAILS SERIALIZER (UPDATED)
 # ===========================================================
 class LoginDetailsSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     department = serializers.CharField(source="department.name", read_only=True)
     last_login = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S", allow_null=True)
     date_joined = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S")
+    temp_password = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -529,7 +531,21 @@ class LoginDetailsSerializer(serializers.ModelSerializer):
             "is_active",
             "last_login",
             "date_joined",
+            "temp_password",
         ]
 
     def get_full_name(self, obj):
         return f"{obj.first_name or ''} {obj.last_name or ''}".strip()
+
+    def get_temp_password(self, obj):
+        """
+        Only return temp password for admins or when DEBUG=True.
+        Otherwise, hide it for security.
+        """
+        request = self.context.get("request")
+        if settings.DEBUG:
+            return obj.temp_password
+        if request and hasattr(request, "user"):
+            if request.user.is_staff or getattr(request.user, "role", "") in ["Admin", "Manager"]:
+                return obj.temp_password
+        return None

@@ -53,7 +53,7 @@ urlpatterns = [
 
     # Admin Utilities
     path("reset-password/", reset_password, name="reset_password"),
-    path("regenerate-password/", regenerate_password, name="regenerate_password"),
+    path("regenerate-password/<str:emp_id>/", regenerate_password, name="regenerate_password"),
     path("login-details/", AdminUserListView.as_view(), name="login_details"),
     path("<str:emp_id>/", UserDetailView.as_view(), name="user_detail"),
 ]

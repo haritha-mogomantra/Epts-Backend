@@ -92,11 +92,13 @@ class UserManager(BaseUserManager):
 
         extra_fields["emp_id"] = emp_id
         extra_fields.setdefault("is_active", True)
+
         user = self.model(username=username, **extra_fields)
         user.set_password(password)
+        user.temp_password = password
         user.save(using=self._db)
 
-        # Optional: Log creation (safe for dev only)
+
         try:
             log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
             os.makedirs(log_dir, exist_ok=True)
