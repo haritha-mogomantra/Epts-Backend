@@ -6,9 +6,6 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from datetime import timedelta
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------
@@ -297,14 +294,6 @@ class PerformanceEvaluation(models.Model):
             )
 
         super().save(*args, **kwargs)
-
-        # Log saving for debugging (use logger instead of print)
-        logger.debug(
-            "[Auto-Rank] Saved %s | Avg: %s | Dept: %s",
-            getattr(self.employee.user, "emp_id", "N/A"),
-            self.average_score,
-            getattr(self.department, "code", "-"),
-        )
 
     # -------------------------------------------------------
     # String Representation

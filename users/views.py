@@ -576,3 +576,46 @@ class AdminUserListView(generics.ListAPIView):
         context["request"] = self.request
         return context
 
+
+
+# ===========================================================
+# GET EMPLOYEE DETAILS BY EMP_ID  (For Performance Module)
+# ===========================================================
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+from rest_framework.response import Response
+# make sure Employee is already imported: from employee.models import Employee, Department
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_employee_by_id(request, emp_id):
+    """
+    GET /api/employees/employee/<emp_id>/
+    Returns basic employee details used by PerformanceMetrics frontend.
+    """
+    try:
+        # Try to get Employee by emp_id
+        employee = Employee.objects.select_related("user", "department", "manager").get(emp_id__iexact=emp_id)
+
+        manager_name = None
+        if getattr(employee, "manager", None):
+            # manager is Employee instance — attempt to derive name from related user
+            mgr_user = getattr(employee.manager, "user", None)
+            if mgr_user:
+                manager_name = f"{mgr_user.first_name or ''} {mgr_user.last_name or ''}".strip()
+            else:
+                manager_name = getattr(employee.manager, "full_name", None) or str(employee.manager)
+
+        return Response({
+            "id": employee.emp_id,
+            "firstname": getattr(employee.user, "first_name", "") or getattr(employee, "firstname", ""),
+            "lastname": getattr(employee.user, "last_name", "") or getattr(employee, "lastname", ""),
+            "designation": employee.department.name if getattr(employee, "department", None) else "",
+            "manager": manager_name or "N/A",
+        }, status=status.HTTP_200_OK)
+
+    except Employee.DoesNotExist:
+        return Response({"error": "Employee not found."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)

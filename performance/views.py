@@ -9,8 +9,6 @@ from django.db.models import Max, F, Avg, Window, Count
 from django.db.models.functions import Rank
 from django.db import IntegrityError
 from django.utils import timezone
-import logging
-
 from .models import PerformanceEvaluation
 from .serializers import (
     PerformanceEvaluationSerializer,
@@ -20,8 +18,6 @@ from .serializers import (
 )
 from employee.models import Employee, Department
 from notifications.models import Notification
-
-logger = logging.getLogger(__name__)
 
 
 # ===========================================================
@@ -82,7 +78,6 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as exc:
-            logger.exception("Error saving performance evaluation: %s", exc)
             return Response(
                 {"error": "An unexpected error occurred while saving evaluation."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -96,7 +91,7 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 auto_delete=True,
             )
         except Exception as e:
-            logger.warning("Notification creation failed: %s", e)
+            pass
 
         return Response(
             {
@@ -388,5 +383,4 @@ class PerformanceDashboardView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
-            logger.exception("Error generating performance dashboard: %s", e)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
