@@ -31,5 +31,5 @@ urlpatterns = [
     path("employee/<str:emp_id>/", EmployeePerformanceView.as_view(), name="employee_performance_view"),
 
     # Employee performance by ID (alternate)
-    path("evaluations/<str:emp_id>/", EmployeePerformanceByIdView.as_view(), name="performance_by_emp"),
+    path("evaluation-by-emp/<str:emp_id>/", EmployeePerformanceByIdView.as_view(), name="performance_by_emp"),
 ]

@@ -73,19 +73,28 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # 🔐 Password validation
         if not user.check_password(password):
-            if hasattr(user, "increment_failed_attempts"):
-                user.increment_failed_attempts()
+            # Increment failed attempt counter
+            user.failed_login_attempts += 1
+            remaining = self.LOCK_THRESHOLD - user.failed_login_attempts
 
-            # Refresh DB state after increment
-            user.refresh_from_db(fields=["account_locked", "failed_login_attempts", "locked_at", "is_active"])
+            # Lock account if threshold reached
+            if user.failed_login_attempts >= self.LOCK_THRESHOLD:
+                user.lock_account()
+                raise serializers.ValidationError(
+                    {"detail": f"Account locked. Try again after {self.LOCK_DURATION_HOURS} hours."}
+                )
 
-            if user.account_locked:
-                raise serializers.ValidationError({
-                    "detail": f"Too many failed attempts. Account locked for {self.LOCK_DURATION_HOURS} hours."
-                })
+            user.save(update_fields=["failed_login_attempts"])
 
-            remaining = max(0, self.LOCK_THRESHOLD - getattr(user, "failed_login_attempts", 0))
-            raise serializers.ValidationError({"detail": f"Invalid credentials. {remaining} attempt(s) left."})
+            # 🧠 Show alert only for last 3 attempts (3, 2, 1 remaining)
+            if remaining <= 3:
+                raise serializers.ValidationError(
+                    {"detail": f"Invalid credentials. {remaining} attempt(s) left."}
+                )
+            else:
+                # For first two failed attempts, show simple invalid message
+                raise serializers.ValidationError({"detail": "Invalid credentials."})
+
 
         # ✅ Success: Reset failed attempts and unlock if needed
         if hasattr(user, "reset_login_attempts"):

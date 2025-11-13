@@ -55,24 +55,57 @@ class ObtainTokenPairView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
+
         try:
             serializer.is_valid(raise_exception=True)
+
         except Exception as e:
-            # If serializer raised ValidationError, DRF already formatted it
+            # 🧠 Extract and format specific error messages
+            error_text = str(e)
+
+            # Normalize text for easier matching
+            error_lower = error_text.lower()
+
+            # 🧩 Logic for clean, context-aware messages
+            if "account locked" in error_lower:
+                message = "Account locked. Try again after 2 hours."
+            elif "too many failed attempts" in error_lower:
+                message = "Account locked. Try again after 2 hours."
+            elif "attempt(s) left" in error_lower:
+                # Cleanly extract the remaining-attempt message from serializer
+                message = (
+                    error_text.replace("{'detail': [ErrorDetail(string='", "")
+                    .replace("', code='invalid')]}", "")
+                    .replace("{'detail': ", "")
+                    .replace("}", "")
+                    .replace("[", "")
+                    .replace("]", "")
+                    .strip()
+                )
+
+            elif "invalid credentials" in error_lower:
+                message = "Invalid credentials."
+            else:
+                message = "Invalid credentials."
+
             return Response(
-                {"success": False, "message": "Invalid credentials or account locked.", "error": str(e)},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "success": False,
+                    "message": message,
+                    "error": error_text,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ✅ Success block
         data = serializer.validated_data
         user_data = data.get("user", {})
 
-        
         return Response(
             {
                 "success": True,
-                "token": data.get("access"),      # access token
-                "refresh": data.get("refresh"),   # refresh token
+                "token": data.get("access"),       # access token
+                "refresh": data.get("refresh"),    # refresh token
                 "role": user_data.get("role"),
                 "username": user_data.get("username"),
                 "emp_id": user_data.get("emp_id"),

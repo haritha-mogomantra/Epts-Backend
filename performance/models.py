@@ -129,8 +129,6 @@ class PerformanceEvaluation(models.Model):
         ordering = ["-review_date", "-created_at"]
         verbose_name = "Performance Evaluation"
         verbose_name_plural = "Performance Evaluations"
-        # unique_together must be a tuple of tuples
-        unique_together = (("employee", "week_number", "year", "evaluation_type"),)
         indexes = [
             models.Index(fields=["employee"]),
             models.Index(fields=["department"]),
@@ -138,6 +136,7 @@ class PerformanceEvaluation(models.Model):
             models.Index(fields=["evaluation_type"]),
             models.Index(fields=["average_score"]),
         ]
+        constraints = []
 
     # -------------------------------------------------------
     # Validation
@@ -264,22 +263,20 @@ class PerformanceEvaluation(models.Model):
         except ValueError:
             return None
 
+
     # -------------------------------------------------------
     # Save Override
     # -------------------------------------------------------
     def save(self, *args, **kwargs):
-        """
-        Auto-calculate total, average, week/year (from review_date), and readable period before saving.
-        """
+        """Auto-calculate total, average, and prevent duplicate evaluations on create."""
+
         # Ensure week_number/year reflect review_date
         if self.review_date:
             iso = self.review_date.isocalendar()
-            # iso is (year, weeknumber, weekday) for date.isocalendar()
-            # depending on Python version, ensure mapping consistent
             self.week_number = iso[1]
             self.year = iso[0]
 
-        # Department fallback (if not manually set)
+        # Department fallback
         if not self.department and getattr(self.employee, "department", None):
             self.department = self.employee.department
 

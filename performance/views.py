@@ -108,6 +108,38 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+    
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Always use the READ-ONLY serializer for GET
+        serializer = PerformanceEvaluationSerializer(instance)
+        data = serializer.data
+
+        # Ensure metrics always populated
+        data["metrics"] = PerformanceEvaluationSerializer(instance).get_metrics(instance)
+
+        # Ensure rank always sent
+        data["rank"] = instance.rank
+
+        # Ensure department name appears
+        data["department_name"] = getattr(instance.department, "name", None)
+
+        # Ensure employee name appears
+        if instance.employee and instance.employee.user:
+            data["employee_name"] = (
+                f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip()
+            )
+            data["employee_emp_id"] = instance.employee.user.emp_id
+
+        # Ensure evaluator name appears
+        if instance.evaluator:
+            data["evaluator_name"] = (
+                f"{instance.evaluator.first_name} {instance.evaluator.last_name}".strip()
+            )
+
+        return Response(data)
+
 
 
 # ===========================================================
@@ -148,8 +180,7 @@ class EmployeePerformanceByIdView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        ranked_qs = qs.annotate(computed_rank=Window(expression=Rank(), order_by=F("average_score").desc()))
-        serializer = PerformanceEvaluationSerializer(ranked_qs, many=True)
+        serializer = PerformanceEvaluationSerializer(qs, many=True)
 
         return Response(
             {
@@ -158,7 +189,7 @@ class EmployeePerformanceByIdView(APIView):
                     "employee_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
                     "department_name": getattr(emp.department, "name", "-"),
                 },
-                "record_count": ranked_qs.count(),
+                "record_count": qs.count(),
                 "evaluations": serializer.data,
             },
             status=status.HTTP_200_OK,
@@ -173,6 +204,7 @@ class PerformanceSummaryView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        
         role = getattr(request.user, "role", "").lower()
         if role not in ["admin", "manager"]:
             return Response({"error": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
@@ -202,8 +234,43 @@ class PerformanceSummaryView(APIView):
         top_3 = qs.order_by("-average_score")[:3]
         weak_3 = qs.order_by("average_score")[:3]
 
-        top_serialized = PerformanceRankSerializer(top_3, many=True).data
-        weak_serialized = PerformanceRankSerializer(weak_3, many=True).data
+        top_serialized = [
+            {
+                "emp_id": e.employee.user.emp_id,
+                "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
+                "department_name": e.department.name if e.department else None,
+                "average_score": e.average_score,
+                "evaluation_id": e.id,        # ⭐ IMPORTANT
+                "week_number": e.week_number,
+                "year": e.year,
+                "manager_name": (
+                    f"{e.employee.manager.user.first_name} {e.employee.manager.user.last_name}".strip()
+                    if e.employee.manager else "-"
+                ),
+                "total_score": e.total_score,
+                "rank": e.rank,
+            }
+            for e in top_3
+        ]
+
+        weak_serialized = [
+            {
+                "emp_id": e.employee.user.emp_id,
+                "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
+                "department_name": e.department.name if e.department else None,
+                "average_score": e.average_score,
+                "evaluation_id": e.id,        # ⭐ IMPORTANT
+                "week_number": e.week_number,
+                "year": e.year,
+                "manager_name": (
+                    f"{e.employee.manager.user.first_name} {e.employee.manager.user.last_name}".strip()
+                    if e.employee.manager else "-"
+                ),
+                "total_score": e.total_score,
+                "rank": e.rank,
+            }
+            for e in weak_3
+        ]
 
         response = {
             "evaluation_period": f"Week {latest_week}, {latest_year}",

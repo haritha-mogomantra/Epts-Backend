@@ -57,30 +57,42 @@ class SimpleEmployeeSerializer(serializers.ModelSerializer):
 # READ-ONLY SERIALIZER (List / Detail)
 # ===========================================================
 class PerformanceEvaluationSerializer(serializers.ModelSerializer):
+    department_name = serializers.SerializerMethodField()
+    employee_name = serializers.SerializerMethodField() 
+    evaluator_name = serializers.SerializerMethodField()
     employee = SimpleEmployeeSerializer(read_only=True)
+    employee_emp_id = serializers.CharField(write_only=True, required=False)
     evaluator = SimpleUserSerializer(read_only=True)
     department = SimpleDepartmentSerializer(read_only=True)
 
     metrics = serializers.SerializerMethodField()
-    score_display = serializers.SerializerMethodField()
-    week_label = serializers.SerializerMethodField()
-    score_category = serializers.SerializerMethodField()
 
     class Meta:
         model = PerformanceEvaluation
         fields = [
-            "id", "employee", "evaluator", "department",
-            "evaluation_type", "review_date", "evaluation_period",
-            "week_number", "year", "week_label",
-            "metrics", "total_score", "average_score",
-            "rank", "score_display", "score_category",
-            "remarks", "created_at", "updated_at",
+            "id",
+            "employee",
+            "employee_emp_id",
+            "evaluator",
+            "department",
+            "evaluation_type",
+            "review_date",
+            "evaluation_period",
+            "metrics",
+            "total_score",
+            "average_score",
+            "rank",
+            "remarks",
+            "department_name",
+            "employee_name",
+            "evaluator_name",
         ]
 
+    # ---------- METRICS (Frontend expects simplified keys) ----------
     def get_metrics(self, obj):
-        """Frontend-ready metrics for charts."""
+        """Send metrics as simple keys for frontend mapping"""
         return {
-            "communication": obj.communication_skills,
+            "communication_skills": obj.communication_skills,
             "multitasking": obj.multitasking,
             "team_skills": obj.team_skills,
             "technical_skills": obj.technical_skills,
@@ -89,40 +101,117 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
             "creativity": obj.creativity,
             "work_quality": obj.work_quality,
             "professionalism": obj.professionalism,
-            "consistency": obj.work_consistency,
+            "work_consistency": obj.work_consistency,
             "attitude": obj.attitude,
             "cooperation": obj.cooperation,
             "dependability": obj.dependability,
             "attendance": obj.attendance,
             "punctuality": obj.punctuality,
         }
+    
+    # ---------- CUSTOM FIELDS (department, employee, evaluator) ----------
+    def get_department_name(self, obj):
+        return obj.department.name if obj.department else None
 
-    def get_score_display(self, obj):
-        return f"{obj.total_score} / 1500 ({obj.average_score}%)"
+    def get_employee_name(self, obj):
+        if obj.employee and obj.employee.user:
+            return f"{obj.employee.user.first_name} {obj.employee.user.last_name}".strip()
+        return None
 
-    def get_week_label(self, obj):
-        return f"Week {obj.week_number}, {obj.year}"
+    def get_evaluator_name(self, obj):
+        if obj.evaluator:
+            return f"{obj.evaluator.first_name} {obj.evaluator.last_name}".strip()
+        return None
 
-    def get_score_category(self, obj):
-        score = obj.average_score
-        if score >= 90:
-            return "Excellent"
-        elif score >= 80:
-            return "Good"
-        elif score >= 70:
-            return "Average"
-        elif score >= 60:
-            return "Below Average"
-        else:
-            return "Poor"
 
+    # ---------- CREATE ----------
+    def create(self, validated_data):
+        emp_id = validated_data.pop("employee_emp_id", None)
+        from employee.models import Employee
+        employee = None
+
+        if emp_id:
+            try:
+                employee = Employee.objects.get(emp_id=emp_id)
+                validated_data["employee"] = employee
+            except Employee.DoesNotExist:
+                raise serializers.ValidationError({"employee_emp_id": f"Employee ID '{emp_id}' not found."})
+
+        # ✅ Skip duplicate check if same employee/week/year/type already exists
+        evaluation_type = validated_data.get("evaluation_type")
+        review_date = validated_data.get("review_date")
+
+        from datetime import date
+        import datetime
+
+        if review_date:
+            iso_year, iso_week, _ = review_date.isocalendar()
+            validated_data["year"] = iso_year
+            validated_data["week_number"] = iso_week
+
+            duplicate = (
+                PerformanceEvaluation.objects.filter(
+                    employee=employee,
+                    year=iso_year,
+                    week_number=iso_week,
+                    evaluation_type=evaluation_type,
+                ).exists()
+            )
+
+            if duplicate:
+                raise serializers.ValidationError({
+                    "duplicate": f"Evaluation already exists for {employee.emp_id} (Week {iso_week}, {iso_year}, {evaluation_type})."
+                })
+
+        return super().create(validated_data)
+
+    # ---------- UPDATE ----------
+    def update(self, instance, validated_data):
+        emp_id = validated_data.pop("employee_emp_id", None)
+        metrics_data = self.initial_data.get("metrics", {})
+
+        if emp_id:
+            from employee.models import Employee
+            try:
+                validated_data["employee"] = Employee.objects.get(emp_id=emp_id)
+            except Employee.DoesNotExist:
+                raise serializers.ValidationError({"employee_emp_id": f"Employee ID '{emp_id}' not found."})
+
+        # ✅ Apply metric updates safely (and persist)
+        for key, value in metrics_data.items():
+            if hasattr(instance, key):
+                setattr(instance, key, value)
+
+        # ✅ Update other fields like total_score, remarks, etc.
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+        return instance
+
+    # ---------- REPRESENTATION (Response to Frontend) ----------
     def to_representation(self, instance):
         rep = super().to_representation(instance)
-        rep["department_name"] = getattr(instance.department, "name", None)
-        rep["employee_name"] = (
-            f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip()
-            if instance.employee and instance.employee.user else None
+
+        # Ensure department name always appears
+        rep["department_name"] = (
+            getattr(instance.department, "name", None)
+            if hasattr(instance, "department") and instance.department
+            else None
         )
+
+        # Include employee name and emp_id for frontend display
+        if instance.employee and hasattr(instance.employee, "user"):
+            rep["employee_name"] = f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip()
+            rep["employee_emp_id"] = getattr(instance.employee, "emp_id", None)
+        else:
+            rep["employee_name"] = getattr(instance.employee, "full_name", None)
+            rep["employee_emp_id"] = getattr(instance.employee, "emp_id", None)
+
+        # Include evaluator name if present
+        if instance.evaluator:
+            rep["evaluator_name"] = f"{instance.evaluator.first_name} {instance.evaluator.last_name}".strip()
+
         return rep
 
 
@@ -185,22 +274,22 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         else:
             self.context["department"] = emp.department
 
-        # Prevent duplicate evaluations for same week/year/type
-        review_date = attrs.get("review_date", timezone.now().date())
-        evaluation_type = attrs.get("evaluation_type", "Manager")
+        # Prevent duplicate evaluations only when creating new record
+        if not self.instance:
+            review_date = attrs.get("review_date", timezone.now().date())
+            evaluation_type = attrs.get("evaluation_type", "Manager")
 
-        week_number = review_date.isocalendar()[1]
-        year = review_date.year
+            week_number = review_date.isocalendar()[1]
+            year = review_date.year
 
-        existing = PerformanceEvaluation.objects.filter(
-            employee=emp, week_number=week_number, year=year, evaluation_type=evaluation_type
-        )
-        if self.instance:
-            existing = existing.exclude(pk=self.instance.pk)
-        if existing.exists():
-            raise serializers.ValidationError({
-                "duplicate": f"Evaluation already exists for {emp.user.emp_id} (Week {week_number}, {year}, {evaluation_type})."
-            })
+            existing = PerformanceEvaluation.objects.filter(
+                employee=emp, week_number=week_number, year=year, evaluation_type=evaluation_type
+            )
+
+            if existing.exists():
+                raise serializers.ValidationError({
+                    "duplicate": f"Evaluation already exists for {emp.user.emp_id} (Week {week_number}, {year}, {evaluation_type})."
+                })
 
         # Metric validation — ensure 0–100 integer values
         for field, value in attrs.items():
@@ -245,10 +334,79 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
 
     # ---------------------- Update ----------------------
     def update(self, instance, validated_data):
+        """
+        Update performance metrics and recalculate total/average/rank correctly.
+        Accepts metrics sent as a nested 'metrics' object in the request body.
+        """
+        # 1) Metric field names on the model
+        metric_fields = {
+            "communication_skills": "communication_skills",
+            "multitasking": "multitasking",
+            "team_skills": "team_skills",
+            "technical_skills": "technical_skills",
+            "job_knowledge": "job_knowledge",
+            "productivity": "productivity",
+            "creativity": "creativity",
+            "work_quality": "work_quality",
+            "professionalism": "professionalism",
+            "work_consistency": "work_consistency",
+            "attitude": "attitude",
+            "cooperation": "cooperation",
+            "dependability": "dependability",
+            "attendance": "attendance",
+            "punctuality": "punctuality",
+        }
+
+
+        # 2) Apply non-metric validated fields first (like review_date, remarks, etc.)
         for attr, value in validated_data.items():
+            # Avoid overwriting nested metrics which we handle separately
+            if attr in ("employee", "employee_emp_id", "evaluator_emp_id", "department_code"):
+                continue
             setattr(instance, attr, value)
+
+        # 3) Pull metrics from initial_data (frontend payload)
+        metrics_data = self.initial_data.get("metrics") or {}
+
+        # If frontend provided top-level metric keys (e.g., communication_skills directly), include them
+        # (some clients may send both styles)
+        for key in list(validated_data.keys()):
+            if key in metric_fields.values():
+                metrics_data.setdefault(key, validated_data.get(key))
+
+        # 4) Validate and assign metric values
+        for k, v in metrics_data.items():
+            # normalize key to the model field name
+            model_field = metric_fields.get(k, k)  # fallback to k if key already matches model field
+            if model_field not in [f.name for f in instance._meta.fields]:
+                # ignore unknown keys
+                continue
+
+            # validate numeric
+            try:
+                num = int(v)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError({k: "Metric must be an integer between 0 and 100."})
+
+            if not (0 <= num <= 100):
+                raise serializers.ValidationError({k: "Metric must be between 0 and 100."})
+
+            setattr(instance, model_field, num)
+
+        # 5) Recalculate totals & averages
+        instance.calculate_total_score()
+
+        # 6) Persist and recompute ranks
         instance.save()
-        instance.auto_rank_trigger()
+        try:
+            instance.auto_rank_trigger()
+        except Exception:
+            # don't block the update if ranking fails for some reason
+            pass
+
+        # 7) Optionally refresh from DB to get any DB side updates
+        instance.refresh_from_db()
+
         return instance
 
 
@@ -283,20 +441,7 @@ class PerformanceDashboardSerializer(serializers.ModelSerializer):
         return "-"
 
     def get_score_display(self, obj):
-        return f"{obj.total_score} / 1500 ({obj.average_score}%)"
-
-    def get_score_category(self, obj):
-        score = obj.average_score
-        if score >= 90:
-            return "Excellent"
-        elif score >= 80:
-            return "Good"
-        elif score >= 70:
-            return "Average"
-        elif score >= 60:
-            return "Below Average"
-        else:
-            return "Poor"
+        return f"{obj.total_score} / 1500"
 
 
 class PerformanceRankSerializer(serializers.ModelSerializer):
@@ -304,13 +449,13 @@ class PerformanceRankSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     department_name = serializers.ReadOnlyField(source="department.name")
     score_display = serializers.SerializerMethodField()
-    score_category = serializers.SerializerMethodField()
+    
 
     class Meta:
         model = PerformanceEvaluation
         fields = [
-            "emp_id", "full_name", "department_name",
-            "average_score", "rank", "score_display", "score_category"
+            "emp_id", "full_name", "department_name", "total_score",
+            "average_score", "rank", "score_display"
         ]
 
     def get_full_name(self, obj):
@@ -318,17 +463,4 @@ class PerformanceRankSerializer(serializers.ModelSerializer):
         return f"{u.first_name} {u.last_name}".strip()
 
     def get_score_display(self, obj):
-        return f"{obj.total_score} / 1500 ({obj.average_score}%)"
-
-    def get_score_category(self, obj):
-        score = obj.average_score
-        if score >= 90:
-            return "Excellent"
-        elif score >= 80:
-            return "Good"
-        elif score >= 70:
-            return "Average"
-        elif score >= 60:
-            return "Below Average"
-        else:
-            return "Poor"
+        return f"{obj.total_score} / 1500"
