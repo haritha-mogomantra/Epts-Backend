@@ -128,7 +128,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         request = self.request
         user = request.user
-        qs = Employee.objects.select_related("user", "department", "manager").filter(is_deleted=False)
+        qs = Employee.objects.select_related("user", "department", "manager")
 
         role = getattr(user, "role", "")
         if role == "Manager":

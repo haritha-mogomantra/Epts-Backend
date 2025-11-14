@@ -85,9 +85,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
     department_code = serializers.ReadOnlyField(source="department.code")
     manager_name = serializers.SerializerMethodField(read_only=True)
     team_size = serializers.SerializerMethodField(read_only=True)
-
-    # ✅ Manager field now supports emp_id or name
     manager = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Employee
@@ -96,7 +95,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "department", "department_name", "department_code",
             "role", "manager", "manager_name", "designation",
             "project_name",
-            "status", "joining_date", "team_size",
+            "status", "joining_date", "status", "team_size",
             "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
@@ -114,6 +113,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     def get_team_size(self, obj):
         return Employee.objects.filter(manager=obj, is_deleted=False).count()
+    
+    def get_status(self, obj):
+        return "Inactive" if obj.is_deleted else (obj.status or "Active")
 
     # ===========================================================
     # WRITE VALIDATION (accepts emp_id or full name)
@@ -168,6 +170,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if manager and isinstance(manager, str):
             validated_data["manager"] = self.validate_manager(manager)
         return super().update(instance, validated_data)
+    
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        # If soft-deleted, force status to Inactive
+        if instance.is_deleted:
+            data["status"] = "Inactive"
+
+        return data
+
 
 
 # ===========================================================

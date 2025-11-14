@@ -5,6 +5,7 @@ from rest_framework import viewsets, permissions, status, filters
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from django.db.models import Max, F, Avg, Window, Count
 from django.db.models.functions import Rank
 from django.db import IntegrityError
@@ -70,8 +71,10 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         try:
-            instance = serializer.save()
-            instance.auto_rank_trigger()
+            instance = serializer.save()       # create + calculate scores in model.save()
+            instance.refresh_from_db()         # ⭐ critical: pull updated scores/evaluation_period
+            instance.auto_rank_trigger()       # update ranks
+            instance.refresh_from_db()         # ⭐ critical: pull updated rank
         except IntegrityError:
             return Response(
                 {"error": "Performance record already exists for this week and evaluator."},
@@ -79,7 +82,7 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
             )
         except Exception as exc:
             return Response(
-                {"error": "An unexpected error occurred while saving evaluation."},
+                {"error": "An unexpected error occurred while saving evaluation.", "detail": str(exc)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -90,25 +93,30 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 message=f"Your weekly performance for {instance.evaluation_period} has been published.",
                 auto_delete=True,
             )
-        except Exception as e:
+        except Exception:
             pass
 
         return Response(
             {
                 "message": "Performance evaluation recorded successfully.",
                 "data": {
-                    "employee_name": f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip(),
+                    "evaluation_id": instance.id,
                     "emp_id": instance.employee.user.emp_id,
+                    "employee_name": f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip(),
                     "department_name": getattr(instance.department, "name", None),
+
+                    # ⭐ These were stale before — now corrected
+                    "total_score": instance.total_score,
                     "average_score": instance.average_score,
-                    "rank": instance.rank,
                     "evaluation_period": instance.evaluation_period,
+                    "rank": instance.rank,
+
                     "remarks": instance.remarks,
                 },
             },
             status=status.HTTP_201_CREATED,
         )
-    
+   
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
 
@@ -200,93 +208,73 @@ class EmployeePerformanceByIdView(APIView):
 # PERFORMANCE SUMMARY (Admin / Manager Dashboard)
 # ===========================================================
 class PerformanceSummaryView(APIView):
-    """Weekly summary of departments and leaderboard."""
+    """Weekly summary of departments and leaderboard with pagination."""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        
+
         role = getattr(request.user, "role", "").lower()
         if role not in ["admin", "manager"]:
             return Response({"error": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
 
-        latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
-        if not latest_year:
-            return Response({"message": "No performance data yet."}, status=status.HTTP_200_OK)
+        # --- Read Optional Week/Year From Frontend ---
+        req_week = request.query_params.get("week")
+        req_year = request.query_params.get("year")
 
-        latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(max_week=Max("week_number"))[
-            "max_week"
-        ]
-        if not latest_week:
-            return Response({"message": "No weekly data found."}, status=status.HTTP_200_OK)
+        if req_week and req_year:
+            qs = PerformanceEvaluation.objects.filter(
+                year=req_year,
+                week_number=req_week
+            ).select_related("employee__user", "department").order_by("-average_score")
 
-        qs = PerformanceEvaluation.objects.filter(year=latest_year, week_number=latest_week).select_related(
-            "employee__user", "department"
-        )
+            evaluation_period = f"Week {req_week}, {req_year}"
 
-        overall_avg = round(qs.aggregate(Avg("average_score"))["average_score__avg"] or 0, 2)
-        dept_summary = qs.values("department__name").annotate(avg_score=Avg("average_score")).order_by("-avg_score")
+        else:
+            # fallback to latest week
+            latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
+            if not latest_year:
+                return Response({"message": "No performance data yet."}, status=status.HTTP_200_OK)
 
-        departments = [
-            {"department_name": d["department__name"] or "N/A", "average_score": round(d["avg_score"], 2)}
-            for d in dept_summary
-        ]
+            latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(
+                max_week=Max("week_number")
+            )["max_week"]
 
-        top_3 = qs.order_by("-average_score")[:3]
-        weak_3 = qs.order_by("average_score")[:3]
+            if not latest_week:
+                return Response({"message": "No weekly data found."}, status=status.HTTP_200_OK)
 
-        top_serialized = [
+            qs = PerformanceEvaluation.objects.filter(
+                year=latest_year,
+                week_number=latest_week
+            ).select_related("employee__user", "department").order_by("-average_score")
+
+            evaluation_period = f"Week {latest_week}, {latest_year}"
+
+        # ------- ALWAYS INITIALIZE PAGINATOR -------
+        paginator = PageNumberPagination()
+        paginator.page_size = int(request.query_params.get("page_size", 10))
+        result_page = paginator.paginate_queryset(qs, request)
+
+        # ------- Build Response Records -------
+        employee_list = [
             {
+                "id": e.id,
+                "evaluation_id": e.id,
                 "emp_id": e.employee.user.emp_id,
                 "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
                 "department_name": e.department.name if e.department else None,
-                "average_score": e.average_score,
-                "evaluation_id": e.id,        # ⭐ IMPORTANT
-                "week_number": e.week_number,
-                "year": e.year,
-                "manager_name": (
-                    f"{e.employee.manager.user.first_name} {e.employee.manager.user.last_name}".strip()
-                    if e.employee.manager else "-"
-                ),
                 "total_score": e.total_score,
+                "average_score": e.average_score,
                 "rank": e.rank,
+                "evaluation_period": e.evaluation_period or "-",
             }
-            for e in top_3
+            for e in result_page
         ]
 
-        weak_serialized = [
-            {
-                "emp_id": e.employee.user.emp_id,
-                "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
-                "department_name": e.department.name if e.department else None,
-                "average_score": e.average_score,
-                "evaluation_id": e.id,        # ⭐ IMPORTANT
-                "week_number": e.week_number,
-                "year": e.year,
-                "manager_name": (
-                    f"{e.employee.manager.user.first_name} {e.employee.manager.user.last_name}".strip()
-                    if e.employee.manager else "-"
-                ),
-                "total_score": e.total_score,
-                "rank": e.rank,
-            }
-            for e in weak_3
-        ]
-
-        response = {
-            "evaluation_period": f"Week {latest_week}, {latest_year}",
-            "overall_average": overall_avg,
-            "department_summary": departments,
-            "top_3": top_serialized,
-            "weak_3": weak_serialized,
-        }
-
-        if request.query_params.get("include_rankings", "false").lower() == "true":
-            ranked_qs = qs.annotate(rank_position=Window(expression=Rank(), order_by=F("average_score").desc()))
-            leaderboard = PerformanceRankSerializer(ranked_qs[:10], many=True).data
-            response["leaderboard"] = leaderboard
-
-        return Response(response, status=status.HTTP_200_OK)
-
+        # ------- Return Paginated Response -------
+        return paginator.get_paginated_response({
+            "evaluation_period": evaluation_period,
+            "records": employee_list,
+        })
 
 # ===========================================================
 # EMPLOYEE DASHBOARD (Self Performance Trend)

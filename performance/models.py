@@ -108,6 +108,24 @@ class PerformanceEvaluation(models.Model):
     attendance = models.PositiveSmallIntegerField(default=0)
     punctuality = models.PositiveSmallIntegerField(default=0)
 
+
+    communication_skills_comment = models.TextField(blank=True, null=True)
+    multitasking_comment = models.TextField(blank=True, null=True)
+    team_skills_comment = models.TextField(blank=True, null=True)
+    technical_skills_comment = models.TextField(blank=True, null=True)
+    job_knowledge_comment = models.TextField(blank=True, null=True)
+    productivity_comment = models.TextField(blank=True, null=True)
+    creativity_comment = models.TextField(blank=True, null=True)
+    work_quality_comment = models.TextField(blank=True, null=True)
+    professionalism_comment = models.TextField(blank=True, null=True)
+    work_consistency_comment = models.TextField(blank=True, null=True)
+    attitude_comment = models.TextField(blank=True, null=True)
+    cooperation_comment = models.TextField(blank=True, null=True)
+    dependability_comment = models.TextField(blank=True, null=True)
+    attendance_comment = models.TextField(blank=True, null=True)
+    punctuality_comment = models.TextField(blank=True, null=True)
+
+
     # -------------------------------------------------------
     # Computed Fields
     # -------------------------------------------------------

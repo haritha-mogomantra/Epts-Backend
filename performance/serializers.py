@@ -90,25 +90,54 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
 
     # ---------- METRICS (Frontend expects simplified keys) ----------
     def get_metrics(self, obj):
-        """Send metrics as simple keys for frontend mapping"""
         return {
             "communication_skills": obj.communication_skills,
+            "communication_skills_comment": obj.communication_skills_comment,
+
             "multitasking": obj.multitasking,
+            "multitasking_comment": obj.multitasking_comment,
+
             "team_skills": obj.team_skills,
+            "team_skills_comment": obj.team_skills_comment,
+
             "technical_skills": obj.technical_skills,
+            "technical_skills_comment": obj.technical_skills_comment,
+
             "job_knowledge": obj.job_knowledge,
+            "job_knowledge_comment": obj.job_knowledge_comment,
+
             "productivity": obj.productivity,
+            "productivity_comment": obj.productivity_comment,
+
             "creativity": obj.creativity,
+            "creativity_comment": obj.creativity_comment,
+
             "work_quality": obj.work_quality,
+            "work_quality_comment": obj.work_quality_comment,
+
             "professionalism": obj.professionalism,
+            "professionalism_comment": obj.professionalism_comment,
+
             "work_consistency": obj.work_consistency,
+            "work_consistency_comment": obj.work_consistency_comment,
+
             "attitude": obj.attitude,
+            "attitude_comment": obj.attitude_comment,
+
             "cooperation": obj.cooperation,
+            "cooperation_comment": obj.cooperation_comment,
+
             "dependability": obj.dependability,
+            "dependability_comment": obj.dependability_comment,
+
             "attendance": obj.attendance,
+            "attendance_comment": obj.attendance_comment,
+
             "punctuality": obj.punctuality,
+            "punctuality_comment": obj.punctuality_comment,
         }
-    
+
+
     # ---------- CUSTOM FIELDS (department, employee, evaluator) ----------
     def get_department_name(self, obj):
         return obj.department.name if obj.department else None
@@ -230,11 +259,22 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "id", "employee", "employee_emp_id", "evaluator_emp_id", "department_code",
             "evaluation_type", "review_date", "evaluation_period",
+
+            # Metrics
             "communication_skills", "multitasking", "team_skills",
             "technical_skills", "job_knowledge", "productivity", "creativity",
             "work_quality", "professionalism", "work_consistency",
             "attitude", "cooperation", "dependability", "attendance",
-            "punctuality", "remarks",
+            "punctuality",
+
+            # COMMENT FIELDS
+            "communication_skills_comment", "multitasking_comment", "team_skills_comment",
+            "technical_skills_comment", "job_knowledge_comment", "productivity_comment",
+            "creativity_comment", "work_quality_comment", "professionalism_comment",
+            "work_consistency_comment", "attitude_comment", "cooperation_comment",
+            "dependability_comment", "attendance_comment", "punctuality_comment",
+
+            "remarks",
         ]
 
     # ---------------------- Validations ----------------------
@@ -319,9 +359,35 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         evaluator = self.context.get("evaluator")
         department = self.context.get("department")
 
+        # Remove helper fields
         for f in ["employee", "employee_emp_id", "evaluator_emp_id", "department_code"]:
             validated_data.pop(f, None)
 
+        # -----------------------------
+        # MERGE TOP-LEVEL METRIC FIELDS
+        # -----------------------------
+        metric_fields = {
+            "communication_skills", "multitasking", "team_skills", "technical_skills",
+            "job_knowledge", "productivity", "creativity", "work_quality",
+            "professionalism", "work_consistency", "attitude", "cooperation",
+            "dependability", "attendance", "punctuality"
+        }
+
+        # MERGE flat fields
+        for k in metric_fields:
+            if k in self.initial_data:
+                validated_data[k] = int(self.initial_data.get(k, 0))
+
+        # MERGE nested metrics object 
+        metrics = self.initial_data.get("metrics") or {}
+        if isinstance(metrics, dict):
+            for k, v in metrics.items():
+                if k in metric_fields:
+                    validated_data[k] = int(v)
+
+        # -----------------------------
+        # Create instance with metrics
+        # -----------------------------
         instance = PerformanceEvaluation.objects.create(
             employee=emp,
             evaluator=evaluator,
@@ -329,82 +395,121 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
             **validated_data,
         )
 
-        instance.auto_rank_trigger()
+        # -----------------------------
+        # MERGE COMMENT FIELDS
+        # -----------------------------
+        comment_fields = [
+            "communication_skills_comment", "multitasking_comment", "team_skills_comment",
+            "technical_skills_comment", "job_knowledge_comment", "productivity_comment",
+            "creativity_comment", "work_quality_comment", "professionalism_comment",
+            "work_consistency_comment", "attitude_comment", "cooperation_comment",
+            "dependability_comment", "attendance_comment", "punctuality_comment"
+        ]
+
+        # From nested metrics object
+        metrics_comments = self.initial_data.get("metrics", {})
+        for field in comment_fields:
+            if field in metrics_comments:
+                setattr(instance, field, metrics_comments[field])
+
+        # From flat POST level (optional)
+        for field in comment_fields:
+            if field in self.initial_data:
+                setattr(instance, field, self.initial_data[field])
+
+
+        # -----------------------------
+        # RECALCULATE TOTAL & AVG
+        # -----------------------------
+        instance.calculate_total_score()
+        instance.save()
+
+        # -----------------------------
+        # UPDATE RANK
+        # -----------------------------
+        try:
+            instance.auto_rank_trigger()
+        except:
+            pass
+
+        instance.refresh_from_db()
         return instance
 
     # ---------------------- Update ----------------------
     def update(self, instance, validated_data):
         """
-        Update performance metrics and recalculate total/average/rank correctly.
-        Accepts metrics sent as a nested 'metrics' object in the request body.
+        Update metrics + other fields, recalc score, recalc rank,
+        and always return fresh updated values.
         """
-        # 1) Metric field names on the model
-        metric_fields = {
-            "communication_skills": "communication_skills",
-            "multitasking": "multitasking",
-            "team_skills": "team_skills",
-            "technical_skills": "technical_skills",
-            "job_knowledge": "job_knowledge",
-            "productivity": "productivity",
-            "creativity": "creativity",
-            "work_quality": "work_quality",
-            "professionalism": "professionalism",
-            "work_consistency": "work_consistency",
-            "attitude": "attitude",
-            "cooperation": "cooperation",
-            "dependability": "dependability",
-            "attendance": "attendance",
-            "punctuality": "punctuality",
-        }
 
-
-        # 2) Apply non-metric validated fields first (like review_date, remarks, etc.)
+        # ---------------------------------------
+        # Apply non-metric fields
+        # ---------------------------------------
         for attr, value in validated_data.items():
-            # Avoid overwriting nested metrics which we handle separately
-            if attr in ("employee", "employee_emp_id", "evaluator_emp_id", "department_code"):
+            if attr in ["employee", "employee_emp_id", "evaluator_emp_id", "department_code"]:
                 continue
             setattr(instance, attr, value)
 
-        # 3) Pull metrics from initial_data (frontend payload)
-        metrics_data = self.initial_data.get("metrics") or {}
+        # ---------------------------------------
+        # Merge all metric fields (top-level + nested)
+        # ---------------------------------------
+        metric_fields = {
+            "communication_skills", "multitasking", "team_skills", "technical_skills",
+            "job_knowledge", "productivity", "creativity", "work_quality",
+            "professionalism", "work_consistency", "attitude", "cooperation",
+            "dependability", "attendance", "punctuality"
+        }
 
-        # If frontend provided top-level metric keys (e.g., communication_skills directly), include them
-        # (some clients may send both styles)
-        for key in list(validated_data.keys()):
-            if key in metric_fields.values():
-                metrics_data.setdefault(key, validated_data.get(key))
+        # TOP-LEVEL metrics 
+        for key in metric_fields:
+            if key in self.initial_data:
+                setattr(instance, key, int(self.initial_data.get(key, 0)))
 
-        # 4) Validate and assign metric values
-        for k, v in metrics_data.items():
-            # normalize key to the model field name
-            model_field = metric_fields.get(k, k)  # fallback to k if key already matches model field
-            if model_field not in [f.name for f in instance._meta.fields]:
-                # ignore unknown keys
-                continue
+        # Nested metrics object (metrics={...})
+        metrics_obj = self.initial_data.get("metrics") or {}
+        if isinstance(metrics_obj, dict):
+            for key, value in metrics_obj.items():
+                if key in metric_fields:
+                    setattr(instance, key, int(value))
 
-            # validate numeric
-            try:
-                num = int(v)
-            except (TypeError, ValueError):
-                raise serializers.ValidationError({k: "Metric must be an integer between 0 and 100."})
+        
+        # -----------------------------
+        # MERGE COMMENT FIELDS
+        # -----------------------------
+        comment_fields = [
+            "communication_skills_comment", "multitasking_comment", "team_skills_comment",
+            "technical_skills_comment", "job_knowledge_comment", "productivity_comment",
+            "creativity_comment", "work_quality_comment", "professionalism_comment",
+            "work_consistency_comment", "attitude_comment", "cooperation_comment",
+            "dependability_comment", "attendance_comment", "punctuality_comment"
+        ]
 
-            if not (0 <= num <= 100):
-                raise serializers.ValidationError({k: "Metric must be between 0 and 100."})
+        # From nested metrics object
+        metrics_comments = self.initial_data.get("metrics", {})
+        for field in comment_fields:
+            if field in metrics_comments:
+                setattr(instance, field, metrics_comments[field])
 
-            setattr(instance, model_field, num)
+        # From flat POST level (optional)
+        for field in comment_fields:
+            if field in self.initial_data:
+                setattr(instance, field, self.initial_data[field])
 
-        # 5) Recalculate totals & averages
+
+        # ---------------------------------------
+        # Recalculate totals
+        # ---------------------------------------
         instance.calculate_total_score()
-
-        # 6) Persist and recompute ranks
         instance.save()
+
+        # ---------------------------------------
+        # Update Rank
+        # ---------------------------------------
         try:
             instance.auto_rank_trigger()
-        except Exception:
-            # don't block the update if ranking fails for some reason
+        except:
             pass
 
-        # 7) Optionally refresh from DB to get any DB side updates
         instance.refresh_from_db()
 
         return instance
@@ -420,6 +525,7 @@ class PerformanceDashboardSerializer(serializers.ModelSerializer):
     department_name = serializers.ReadOnlyField(source="department.name")
     score_display = serializers.SerializerMethodField()
     score_category = serializers.SerializerMethodField()
+    
 
     class Meta:
         model = PerformanceEvaluation
