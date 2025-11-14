@@ -90,12 +90,16 @@ class WeeklyReportView(APIView):
                 )
 
             feedback_map = {
-                emp.id: get_feedback_average(emp)
+                emp.id: float(get_feedback_average(emp) or 0.0)
                 for emp in Employee.objects.filter(id__in=qs.values_list("employee_id", flat=True))
             }
 
+
             ranked = qs.annotate(
-                computed_rank=Window(expression=Rank(), order_by=F("total_score").desc())
+                computed_rank=Window(
+                    expression=Rank(),
+                    order_by=F("total_score").desc(nulls_last=True)
+                )
             )
 
             result = [
@@ -105,7 +109,7 @@ class WeeklyReportView(APIView):
                     "department": p.department.name if p.department else "-",
                     "total_score": float(p.total_score),
                     "average_score": float(p.average_score),
-                    "feedback_avg": feedback_map.get(p.employee.id, 0.0),
+                    "feedback_avg": float(feedback_map.get(p.employee.id, 0.0) or 0.0),
                     "week_number": week,
                     "year": year,
                     "rank": int(p.computed_rank),
@@ -186,11 +190,17 @@ class MonthlyReportView(APIView):
                 avg_score = round(emp_qs.aggregate(avg=Avg("average_score"))["avg"], 2)
                 best_week_obj = emp_qs.order_by("-average_score").first()
 
-                fb_avg = get_feedback_average(
-                    emp,
-                    start_date=best_week_obj.created_at - timedelta(days=30),
-                    end_date=best_week_obj.created_at,
-                )
+                created_at = getattr(best_week_obj, "created_at", None)
+
+                if created_at:
+                    fb_avg = get_feedback_average(
+                        emp,
+                        start_date=created_at - timedelta(days=30),
+                        end_date=created_at,
+                    )
+                else:
+                    fb_avg = get_feedback_average(emp)
+
 
                 data.append({
                     "emp_id": emp.user.emp_id,
@@ -198,10 +208,10 @@ class MonthlyReportView(APIView):
                     "department": emp.department.name if emp.department else "-",
                     "month": month,
                     "year": year,
-                    "avg_score": avg_score,
+                    "avg_score": float(avg_score or 0.0),
                     "feedback_avg": fb_avg,
                     "best_week": best_week_obj.week_number,
-                    "best_week_score": best_week_obj.average_score,
+                    "best_week_score": float(best_week_obj.average_score or 0.0),
                 })
 
             if save_cache:
@@ -268,21 +278,38 @@ class DepartmentReportView(APIView):
 
             feedback_map = {emp.id: get_feedback_average(emp) for emp in employees}
 
-            ranked = qs.annotate(computed_rank=Window(expression=Rank(), order_by=F("total_score").desc()))
+            ranked = qs.annotate(
+                computed_rank=Window(
+                    expression=Rank(),
+                    order_by=F("total_score").desc(nulls_last=True)
+                )
+            )
 
-            records = [
-                {
+            records = []
+            for perf in ranked:
+                emp = perf.employee
+
+                # SAFE manager name (optional field)
+                manager_obj = getattr(emp, "manager", None)
+                if manager_obj:
+                    manager_full_name = f"{manager_obj.first_name} {manager_obj.last_name}".strip()
+                else:
+                    manager_full_name = "-"
+
+                records.append({
                     "department_name": department_name,
-                    "emp_id": perf.employee.user.emp_id,
-                    "employee_full_name": f"{perf.employee.user.first_name} {perf.employee.user.last_name}".strip(),
+                    "emp_id": emp.user.emp_id,
+                    "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                    "manager_full_name": manager_full_name,  
                     "total_score": float(perf.total_score),
                     "average_score": float(perf.average_score),
-                    "feedback_avg": feedback_map.get(perf.employee.id, 0.0),
+                    "feedback_avg": float(feedback_map.get(emp.id, 0.0) or 0.0),
+                    "week_number": week,                    
+                    "year": year,                            
                     "rank": int(perf.computed_rank),
                     "remarks": perf.remarks or "",
-                }
-                for perf in ranked
-            ]
+                })
+
 
             create_report_notification(
                 triggered_by=request.user,
@@ -306,14 +333,69 @@ class DepartmentReportView(APIView):
 # 4. MANAGER REPORT (Placeholder)
 # ===========================================================
 class ManagerReportView(APIView):
-    """Placeholder: Manager-wise weekly report."""
+    """Returns manager-wise weekly performance report."""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response(
-            {"message": "Manager-wise report endpoint under construction."},
-            status=status.HTTP_200_OK,
-        )
+        manager_id = request.query_params.get("manager_id")
+        week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
+        year = int(request.query_params.get("year", timezone.now().year))
+
+        if not manager_id:
+            return Response({"error": "manager_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Employees under this manager
+            employees = Employee.objects.filter(manager__emp_id__iexact=manager_id)
+
+            if not employees.exists():
+                return Response({"message": "No employees found under this manager."}, status=status.HTTP_200_OK)
+
+            qs = PerformanceEvaluation.objects.filter(
+                employee__in=employees, week_number=week, year=year
+            ).select_related("employee__user", "department")
+
+            if not qs.exists():
+                return Response({"message": f"No performance data for Week {week}, {year}."}, status=status.HTTP_200_OK)
+
+            feedback_map = {
+                emp.id: float(get_feedback_average(emp) or 0.0)
+                for emp in employees
+            }
+
+            ranked = qs.annotate(
+                computed_rank=Window(
+                    expression=Rank(),
+                    order_by=F("total_score").desc(nulls_last=True)
+                )
+            )
+
+            records = []
+            for perf in ranked:
+                emp = perf.employee
+                records.append({
+                    "emp_id": emp.user.emp_id,
+                    "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                    "department": emp.department.name if emp.department else "-",
+                    "total_score": float(perf.total_score),
+                    "average_score": float(perf.average_score),
+                    "feedback_avg": float(feedback_map.get(emp.id, 0.0)),
+                    "week_number": week,
+                    "year": year,
+                    "rank": int(perf.computed_rank),
+                    "remarks": perf.remarks or ""
+                })
+
+            return Response({
+                "manager_id": manager_id,
+                "evaluation_period": f"Week {week}, {year}",
+                "total_employees": len(records),
+                "records": records
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception("ManagerReport Error: %s", str(e))
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ===========================================================
@@ -376,11 +458,18 @@ class ExportWeeklyExcelView(APIView):
                     cell.border = border
 
             feedback_map = {
-                emp.id: get_feedback_average(emp)
+                emp.id: float(get_feedback_average(emp) or 0.0)
                 for emp in Employee.objects.filter(id__in=qs.values_list("employee_id", flat=True))
             }
 
-            ranked = qs.annotate(computed_rank=Window(expression=Rank(), order_by=F("total_score").desc()))
+
+            ranked = qs.annotate(
+                computed_rank=Window(
+                    expression=Rank(),
+                    order_by=F("total_score").desc(nulls_last=True)
+                )
+            )
+
 
             for perf in ranked:
                 ws.append(
@@ -471,31 +560,44 @@ class ExportMonthlyExcelView(APIView):
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                     cell.border = border
 
-            employees = Employee.objects.filter(id__in=qs.values_list("employee_id", flat=True))
-            for emp in employees.select_related("user", "department"):
-                emp_qs = qs.filter(employee=emp)
-                if not emp_qs.exists():
+            employees = Employee.objects.filter(id__in=qs.values_list("employee_id", flat=True)).select_related("user", "department")
+
+            # Pre-cache evaluations per employee to avoid repeated filtering
+            emp_evaluations = {emp.id: qs.filter(employee=emp) for emp in employees}
+
+            for emp in employees:
+                emp_qs = emp_evaluations.get(emp.id)
+
+                if not emp_qs or not emp_qs.exists():
                     continue
+
 
                 avg_score = round(emp_qs.aggregate(avg=Avg("average_score"))["avg"], 2)
                 best_week_obj = emp_qs.order_by("-average_score").first()
-                fb_avg = get_feedback_average(
-                    emp,
-                    start_date=best_week_obj.created_at - timedelta(days=30),
-                    end_date=best_week_obj.created_at,
-                )
+                created_at = getattr(best_week_obj, "created_at", None)
+
+                if created_at:
+                    fb_avg = get_feedback_average(
+                        emp,
+                        start_date=created_at - timedelta(days=30),
+                        end_date=created_at,
+                    )
+                else:
+                    fb_avg = get_feedback_average(emp)
+
 
                 ws.append(
                     [
                         emp.user.emp_id,
                         f"{emp.user.first_name} {emp.user.last_name}",
                         emp.department.name if emp.department else "-",
-                        avg_score,
-                        fb_avg,
+                        float(avg_score or 0.0),
+                        float(fb_avg or 0.0),
                         best_week_obj.week_number,
-                        best_week_obj.average_score,
+                        float(best_week_obj.average_score or 0.0),
                     ]
                 )
+
 
             # Auto-fit columns
             for col in ws.columns:

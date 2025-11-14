@@ -65,6 +65,7 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
     evaluator = SimpleUserSerializer(read_only=True)
     department = SimpleDepartmentSerializer(read_only=True)
 
+
     metrics = serializers.SerializerMethodField()
 
     class Meta:
@@ -166,7 +167,7 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
             except Employee.DoesNotExist:
                 raise serializers.ValidationError({"employee_emp_id": f"Employee ID '{emp_id}' not found."})
 
-        # ✅ Skip duplicate check if same employee/week/year/type already exists
+        # Skip duplicate check if same employee/week/year/type already exists
         evaluation_type = validated_data.get("evaluation_type")
         review_date = validated_data.get("review_date")
 
@@ -206,12 +207,12 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
             except Employee.DoesNotExist:
                 raise serializers.ValidationError({"employee_emp_id": f"Employee ID '{emp_id}' not found."})
 
-        # ✅ Apply metric updates safely (and persist)
+        # Apply metric updates safely (and persist)
         for key, value in metrics_data.items():
             if hasattr(instance, key):
                 setattr(instance, key, value)
 
-        # ✅ Update other fields like total_score, remarks, etc.
+        # Update other fields like total_score, remarks, etc.
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
@@ -253,12 +254,15 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
     employee_emp_id = serializers.CharField(write_only=True, required=False)
     evaluator_emp_id = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
     department_code = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    week = serializers.IntegerField(write_only=True, required=False)
+    year = serializers.IntegerField(write_only=True, required=False)
 
     class Meta:
         model = PerformanceEvaluation
         fields = [
             "id", "employee", "employee_emp_id", "evaluator_emp_id", "department_code",
             "evaluation_type", "review_date", "evaluation_period",
+            "week_number", "year", "week",
 
             # Metrics
             "communication_skills", "multitasking", "team_skills",
@@ -316,15 +320,40 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
 
         # Prevent duplicate evaluations only when creating new record
         if not self.instance:
-            review_date = attrs.get("review_date", timezone.now().date())
+            week_number = (
+                attrs.get("week_number")
+                or attrs.get("week")
+                or self.initial_data.get("week")
+            )
+
+            year = (
+                attrs.get("year")
+                or self.initial_data.get("year")
+            )
+
+            try:
+                week_number = int(week_number)
+                year = int(year)
+            except:
+                raise serializers.ValidationError({"week": "Valid week and year are required."})
+
+            attrs["week_number"] = week_number
+            attrs["year"] = year
+
+            # Remove week
+            attrs.pop("week", None)
+
+
+
             evaluation_type = attrs.get("evaluation_type", "Manager")
 
-            week_number = review_date.isocalendar()[1]
-            year = review_date.year
-
             existing = PerformanceEvaluation.objects.filter(
-                employee=emp, week_number=week_number, year=year, evaluation_type=evaluation_type
+                employee=emp,
+                week_number=week_number,
+                year=year,
+                evaluation_type=evaluation_type
             )
+
 
             if existing.exists():
                 raise serializers.ValidationError({
@@ -351,6 +380,10 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
             if request.user.role not in ["Admin", "Manager"]:
                 raise serializers.ValidationError({"role": "Only Admin or Manager can submit evaluations."})
 
+        if not self.instance:
+            attrs["week_number"] = week_number
+            attrs["year"] = year
+            
         return attrs
 
     # ---------------------- Create ----------------------
@@ -359,9 +392,9 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         evaluator = self.context.get("evaluator")
         department = self.context.get("department")
 
-        # Remove helper fields
-        for f in ["employee", "employee_emp_id", "evaluator_emp_id", "department_code"]:
+        for f in ["employee", "employee_emp_id", "evaluator_emp_id", "department_code", "week"]:
             validated_data.pop(f, None)
+
 
         # -----------------------------
         # MERGE TOP-LEVEL METRIC FIELDS
@@ -441,6 +474,8 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         Update metrics + other fields, recalc score, recalc rank,
         and always return fresh updated values.
         """
+
+        validated_data.pop("week", None)
 
         # ---------------------------------------
         # Apply non-metric fields

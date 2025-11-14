@@ -19,6 +19,9 @@ from .serializers import (
 )
 from employee.models import Employee, Department
 from notifications.models import Notification
+from datetime import date
+from .models import get_week_range
+
 
 
 # ===========================================================
@@ -46,15 +49,75 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
         return PerformanceEvaluationSerializer
 
     def get_queryset(self):
+        """
+        Return queryset scoped by role and optional week/year filters.
+
+        Query params supported:
+        - week  (int)  : ISO week number (also accepts 'week_number')
+        - year  (int)
+
+        Behavior:
+        - If both week+year provided -> return that week's records.
+        - If only week provided -> use most recent year that has that week (fallback to current year).
+        - If only year provided -> return whole year (all weeks).
+        - If neither provided -> return latest week available in DB (year + week).
+        """
         user = self.request.user
         role = getattr(user, "role", "").lower()
         qs = super().get_queryset()
 
+        # role scoping
         if role == "manager":
-            return qs.filter(employee__manager__user=user)
+            qs = qs.filter(employee__manager__user=user)
         elif role == "employee":
-            return qs.filter(employee__user=user)
-        return qs
+            qs = qs.filter(employee__user=user)
+
+        # Accept either 'week' or 'week_number' (frontend may send either)
+        req_week = self.request.query_params.get("week") or self.request.query_params.get("week_number")
+        req_year = self.request.query_params.get("year")
+
+        # normalize to ints when present
+        def to_int(val):
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return None
+
+        week = to_int(req_week)
+        year = to_int(req_year)
+
+        # If both provided -> filter by exact week/year
+        if week and year:
+            return qs.filter(week_number=week, year=year).select_related("employee__user", "department").order_by("rank", "-average_score")
+
+        # If only week provided -> try to find that week in the latest year that contains it
+        if week and not year:
+            # prefer most recent year that has that week
+            candidate = (
+                PerformanceEvaluation.objects.filter(week_number=week)
+                .values_list("year", flat=True)
+                .order_by("-year")
+                .first()
+            )
+            if candidate:
+                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department").order_by("rank", "-average_score")
+            # fallback: filter by week number across years (rare)
+            return qs.filter(week_number=week).select_related("employee__user", "department").order_by("-year", "rank", "-average_score")
+
+        # If only year provided -> return entire year (all weeks)
+        if year and not week:
+            return qs.filter(year=year).select_related("employee__user", "department").order_by("-week_number", "rank", "-average_score")
+
+        # If neither provided -> choose latest week available in DB (preferred)
+        latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
+        if latest_year:
+            latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(max_week=Max("week_number"))["max_week"]
+            if latest_week:
+                return qs.filter(year=latest_year, week_number=latest_week).select_related("employee__user", "department").order_by("rank", "-average_score")
+
+        # Last fallback: return qs ordered by review_date
+        return qs.select_related("employee__user", "department").order_by("-review_date")
+
 
     # --------------------------------------------------------
     # CREATE — Auto Rank Trigger + Notification
@@ -67,14 +130,21 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer = self.get_serializer(
+            data=request.data,
+            context={
+                "request": request,
+                "week_number": request.data.get("week_number"),
+                "year": request.data.get("year"),
+            }
+        )
         serializer.is_valid(raise_exception=True)
 
         try:
             instance = serializer.save()       # create + calculate scores in model.save()
-            instance.refresh_from_db()         # ⭐ critical: pull updated scores/evaluation_period
+            instance.refresh_from_db()         # critical: pull updated scores/evaluation_period
             instance.auto_rank_trigger()       # update ranks
-            instance.refresh_from_db()         # ⭐ critical: pull updated rank
+            instance.refresh_from_db()         # critical: pull updated rank
         except IntegrityError:
             return Response(
                 {"error": "Performance record already exists for this week and evaluator."},
@@ -177,10 +247,22 @@ class EmployeePerformanceByIdView(APIView):
 
         week = request.query_params.get("week")
         year = request.query_params.get("year")
+
+        # normalize numeric filters
         if week:
+            try:
+                week = int(week)
+            except:
+                return Response({"error": "Invalid week"}, status=400)
             qs = qs.filter(week_number=week)
+
         if year:
+            try:
+                year = int(year)
+            except:
+                return Response({"error": "Invalid year"}, status=400)
             qs = qs.filter(year=year)
+
 
         if not qs.exists():
             return Response(
@@ -221,13 +303,34 @@ class PerformanceSummaryView(APIView):
         req_week = request.query_params.get("week")
         req_year = request.query_params.get("year")
 
+        req_week = request.query_params.get("week")
+        req_year = request.query_params.get("year")
+
+        # normalize incoming values
+        if req_week:
+            try:
+                req_week = int(req_week)
+            except:
+                return Response({"error": "Invalid week number"}, status=400)
+
+        if req_year:
+            try:
+                req_year = int(req_year)
+            except:
+                return Response({"error": "Invalid year"}, status=400)
+
         if req_week and req_year:
             qs = PerformanceEvaluation.objects.filter(
                 year=req_year,
                 week_number=req_week
-            ).select_related("employee__user", "department").order_by("-average_score")
+            ).select_related("employee__user", "department").order_by("rank", "-average_score")
 
-            evaluation_period = f"Week {req_week}, {req_year}"
+
+            monday = date.fromisocalendar(int(req_year), int(req_week), 1)
+            start, end = get_week_range(monday)
+            evaluation_period = (
+                f"Week {req_week} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
+            )
 
         else:
             # fallback to latest week
@@ -309,7 +412,9 @@ class EmployeeDashboardView(APIView):
                     "evaluation_period": best.evaluation_period,
                     "average_score": best.average_score,
                 },
-                "trend_data": list(records.values("week_number", "average_score").order_by("week_number")),
+                "trend_data": list(
+                    records.values("week_number", "year", "average_score").order_by("year", "week_number")
+                ),
                 "evaluations": serializer.data,
             },
             status=status.HTTP_200_OK,
@@ -337,9 +442,33 @@ class EmployeePerformanceView(APIView):
             return Response({"error": f"Employee '{emp_id}' not found."}, status=status.HTTP_404_NOT_FOUND)
 
         qs = PerformanceEvaluation.objects.filter(employee=emp).order_by("-review_date")
+
+
+        # Normalize filters
+        week = request.query_params.get("week")
+        year = request.query_params.get("year")
         period = request.query_params.get("evaluation_period")
-        if period:
-            qs = qs.filter(evaluation_period__iexact=period)
+
+        # Apply week/year if provided
+        if week:
+            try:
+                week = int(week)
+            except:
+                return Response({"error": "Invalid week number"}, status=400)
+            qs = qs.filter(week_number=week)
+
+        if year:
+            try:
+                year = int(year)
+            except:
+                return Response({"error": "Invalid year"}, status=400)
+            qs = qs.filter(year=year)
+
+        # Apply evaluation_period filter last — only if week/year not used
+        if period and not (week or year):
+            qs = qs.filter(evaluation_period__icontains=period)
+
+
 
         if not qs.exists():
             return Response({"message": "No records found."}, status=status.HTTP_200_OK)
@@ -416,6 +545,8 @@ class PerformanceDashboardView(APIView):
                 for e in employee_scores[:3]
             ]
 
+            # Weak 3 employees (lowest average scores)
+            weak_employees = employee_scores.order_by("avg_score")[:3]
             weak_3_employees = [
                 {
                     "emp_id": e["employee__user__emp_id"],
@@ -423,8 +554,9 @@ class PerformanceDashboardView(APIView):
                     "department": e["department__name"],
                     "average_score": round(e["avg_score"], 2),
                 }
-                for e in employee_scores.reverse()[:3]
+                for e in weak_employees
             ]
+
 
             return Response(
                 {

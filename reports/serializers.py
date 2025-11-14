@@ -137,7 +137,7 @@ class EmployeeHistorySerializer(serializers.Serializer, ScoreMixin):
 # =====================================================
 class ManagerReportSerializer(serializers.Serializer, ScoreMixin):
     """Weekly report for all employees under a specific manager."""
-    manager_full_name = serializers.CharField()
+    manager_full_name = serializers.CharField(required=False, allow_null=True, default="-")
     emp_id = serializers.CharField()
     employee_full_name = serializers.CharField()
     department = serializers.CharField()
@@ -165,7 +165,7 @@ class DepartmentReportSerializer(serializers.Serializer, ScoreMixin):
     department_name = serializers.CharField()
     emp_id = serializers.CharField()
     employee_full_name = serializers.CharField()
-    manager_full_name = serializers.CharField()
+    manager_full_name = serializers.CharField(required=False, allow_null=True, default="-")
     total_score = serializers.FloatField()
     average_score = serializers.FloatField()
     feedback_avg = serializers.FloatField(required=False, allow_null=True, default=0)

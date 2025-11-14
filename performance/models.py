@@ -6,6 +6,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from datetime import timedelta
+from datetime import date
 
 
 # -----------------------------------------------------------
@@ -288,8 +289,10 @@ class PerformanceEvaluation(models.Model):
     def save(self, *args, **kwargs):
         """Auto-calculate total, average, and prevent duplicate evaluations on create."""
 
-        # Ensure week_number/year reflect review_date
-        if self.review_date:
+
+        # Do NOT override week/year — they must come from frontend
+        if not self.week_number or not self.year:
+            # fallback only if missing
             iso = self.review_date.isocalendar()
             self.week_number = iso[1]
             self.year = iso[0]
@@ -301,12 +304,13 @@ class PerformanceEvaluation(models.Model):
         # Calculate scores
         self.calculate_total_score()
 
-        # Auto-generate readable evaluation period
-        if not self.evaluation_period:
-            start, end = get_week_range(self.review_date)
-            self.evaluation_period = (
-                f"Week {self.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
-            )
+        # Always regenerate evaluation period based on selected week & year
+        d = date.fromisocalendar(self.year, self.week_number, 1)  # Monday of selected week
+        start, end = get_week_range(d)
+
+        self.evaluation_period = (
+            f"Week {self.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
+        )
 
         super().save(*args, **kwargs)
 

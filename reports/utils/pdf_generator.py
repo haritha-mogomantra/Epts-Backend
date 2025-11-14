@@ -28,6 +28,7 @@ def generate_employee_performance_pdf(employee, evaluations, week=None):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     pdf.setTitle(f"Performance Report - {employee.user.emp_id}")
+    y_offset = 10
 
     # -----------------------------------------------------------
     # HEADER SECTION
@@ -35,12 +36,13 @@ def generate_employee_performance_pdf(employee, evaluations, week=None):
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(160, 800, "Employee Performance Report")
 
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(50, 780, f"Employee ID : {employee.user.emp_id}")
     pdf.setFont("Helvetica", 12)
-    pdf.drawString(50, 770, f"Employee ID: {employee.user.emp_id}")
     pdf.drawString(50, 755, f"Name: {employee.user.first_name} {employee.user.last_name}")
     pdf.drawString(50, 740, f"Department: {employee.department.name if employee.department else 'N/A'}")
     if week:
-        pdf.drawString(50, 725, f"Week: {week}")
+        pdf.drawString(50, 725 - y_offset, f"Week: {week}")
     pdf.drawString(50, 710, f"Generated On: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # -----------------------------------------------------------
@@ -67,14 +69,23 @@ def generate_employee_performance_pdf(employee, evaluations, week=None):
     for eval_obj in evaluations:
         try:
             metrics = eval_obj.metrics_breakdown or {}
-            avg_score = round(sum(metrics.values()) / len(metrics), 2) if metrics else 0
+            if metrics:
+                numeric_values = [float(v) for v in metrics.values() if isinstance(v, (int, float))]
+                avg_score = round(sum(numeric_values) / len(numeric_values), 2) if numeric_values else 0
+            else:
+                avg_score = 0
+
         except Exception:
             avg_score = 0
 
         pdf.drawString(50, y, eval_obj.evaluation_type or "N/A")
         pdf.drawString(200, y, str(avg_score))
-        pdf.drawString(330, y, str(getattr(eval_obj, "planned_hours", "-")))
-        pdf.drawString(440, y, str(getattr(eval_obj, "actual_hours", "-")))
+        planned_hours = getattr(eval_obj, "planned_hours", None) or "-"
+        actual_hours = getattr(eval_obj, "actual_hours", None) or "-"
+
+        pdf.drawString(330, y, str(planned_hours))
+        pdf.drawString(440, y, str(actual_hours))
+
 
         y -= 20
         count += 1
