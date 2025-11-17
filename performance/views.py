@@ -88,7 +88,12 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
 
         # If both provided -> filter by exact week/year
         if week and year:
-            return qs.filter(week_number=week, year=year).select_related("employee__user", "department").order_by("rank", "-average_score")
+            return qs.filter(week_number=week, year=year).select_related("employee__user", "department").order_by(
+                "-total_score",
+                "employee__user__first_name",
+                "employee__user__last_name"
+            )
+
 
         # If only week provided -> try to find that week in the latest year that contains it
         if week and not year:
@@ -100,20 +105,37 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 .first()
             )
             if candidate:
-                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department").order_by("rank", "-average_score")
+                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department").order_by(
+                    "-total_score",
+                    "employee__user__first_name",
+                    "employee__user__last_name"
+                )
             # fallback: filter by week number across years (rare)
-            return qs.filter(week_number=week).select_related("employee__user", "department").order_by("-year", "rank", "-average_score")
+            return qs.filter(week_number=week).select_related("employee__user", "department").order_by(
+                "-total_score",
+                "employee__user__first_name",
+                "employee__user__last_name"
+            )
+
 
         # If only year provided -> return entire year (all weeks)
         if year and not week:
-            return qs.filter(year=year).select_related("employee__user", "department").order_by("-week_number", "rank", "-average_score")
+            return qs.filter(year=year).select_related("employee__user", "department").order_by(
+                "-total_score",
+                "employee__user__first_name",
+                "employee__user__last_name"
+            )
 
         # If neither provided -> choose latest week available in DB (preferred)
         latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
         if latest_year:
             latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(max_week=Max("week_number"))["max_week"]
             if latest_week:
-                return qs.filter(year=latest_year, week_number=latest_week).select_related("employee__user", "department").order_by("rank", "-average_score")
+                return qs.filter(year=latest_year, week_number=latest_week).select_related("employee__user", "department").order_by(
+                    "-total_score",
+                    "employee__user__first_name",
+                    "employee__user__last_name"
+                )
 
         # Last fallback: return qs ordered by review_date
         return qs.select_related("employee__user", "department").order_by("-review_date")
@@ -323,7 +345,12 @@ class PerformanceSummaryView(APIView):
             qs = PerformanceEvaluation.objects.filter(
                 year=req_year,
                 week_number=req_week
-            ).select_related("employee__user", "department").order_by("rank", "-average_score")
+            ).select_related("employee__user", "department").order_by(
+                "-total_score",
+                "employee__user__first_name",
+                "employee__user__last_name"
+            )
+
 
 
             monday = date.fromisocalendar(int(req_year), int(req_week), 1)
@@ -348,7 +375,12 @@ class PerformanceSummaryView(APIView):
             qs = PerformanceEvaluation.objects.filter(
                 year=latest_year,
                 week_number=latest_week
-            ).select_related("employee__user", "department").order_by("-average_score")
+            ).select_related("employee__user", "department").order_by(
+                "-total_score",
+                "employee__user__first_name",
+                "employee__user__last_name"
+            )
+
 
             evaluation_period = f"Week {latest_week}, {latest_year}"
 
@@ -569,5 +601,65 @@ class PerformanceDashboardView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+# ===========================================================
+# GET LATEST WEEK + YEAR (For frontend auto-select)
+# ===========================================================
+class LatestEvaluationWeekAPIView(APIView):
+    """
+    Returns the latest evaluation week available in PerformanceEvaluation.
+    Example:
+    {
+        "week": 46,
+        "year": 2025,
+        "evaluation_label": "Week 46 (10 Nov - 16 Nov 2025)"
+    }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            latest_year = PerformanceEvaluation.objects.aggregate(
+                max_year=Max("year")
+            )["max_year"]
+
+            if not latest_year:
+                return Response(
+                    {"week": None, "year": None, "evaluation_label": None},
+                    status=status.HTTP_200_OK,
+                )
+
+            latest_week = PerformanceEvaluation.objects.filter(
+                year=latest_year
+            ).aggregate(
+                max_week=Max("week_number")
+            )["max_week"]
+
+            if not latest_week:
+                return Response(
+                    {"week": None, "year": None, "evaluation_label": None},
+                    status=status.HTTP_200_OK,
+                )
+
+            # Build label
+            record = PerformanceEvaluation.objects.filter(
+                year=latest_year, week_number=latest_week
+            ).first()
+
+            label = record.evaluation_period if record else None
+
+            return Response(
+                {
+                    "week": latest_week,
+                    "year": latest_year,
+                    "evaluation_label": label,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

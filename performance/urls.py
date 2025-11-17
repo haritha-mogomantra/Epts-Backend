@@ -10,6 +10,7 @@ from .views import (
     EmployeeDashboardView,
     EmployeePerformanceView,
     PerformanceDashboardView,
+    LatestEvaluationWeekAPIView,
 )
 
 router = DefaultRouter()
@@ -32,4 +33,6 @@ urlpatterns = [
 
     # Employee performance by ID (alternate)
     path("evaluation-by-emp/<str:emp_id>/", EmployeePerformanceByIdView.as_view(), name="performance_by_emp"),
+
+    path("latest-week/", LatestEvaluationWeekAPIView.as_view(), name="latest-week"),
 ]

@@ -223,21 +223,32 @@ class PerformanceEvaluation(models.Model):
     # -------------------------------------------------------
     def auto_rank_trigger(self):
         """
-        Recalculate ranking for this record's department/week/evaluation_type.
-        Use this from a post_save signal or management command.
+        Dense Ranking:
+        - Same score = same rank
+        - Next different score = next rank
+        - Ranking is GLOBAL (not department-wise)
         """
-        if not self.department:
-            return
         evaluations = PerformanceEvaluation.objects.filter(
-            department=self.department,
             week_number=self.week_number,
             year=self.year,
             evaluation_type=self.evaluation_type,
-        ).order_by("-average_score", "employee__user__first_name", "employee__user__emp_id")
+        ).select_related("employee__user").order_by(
+            "-total_score",
+            "employee__user__first_name",
+            "employee__user__last_name"
+        )
 
-        for i, record in enumerate(evaluations, start=1):
-            if record.rank != i:
-                PerformanceEvaluation.objects.filter(pk=record.pk).update(rank=i)
+        last_score = None
+        current_rank = 0
+
+        for eval_obj in evaluations:
+            if eval_obj.total_score != last_score:
+                current_rank += 1
+                last_score = eval_obj.total_score
+
+            if eval_obj.rank != current_rank:
+                PerformanceEvaluation.objects.filter(pk=eval_obj.pk).update(rank=current_rank)
+
 
     # -------------------------------------------------------
     # Helpers

@@ -55,6 +55,7 @@ class WeeklyReportSerializer(serializers.Serializer, ScoreMixin):
     emp_id = serializers.CharField()
     employee_full_name = serializers.CharField()
     department = serializers.CharField()
+    manager_full_name = serializers.CharField(required=False, allow_null=True, default="-")
     total_score = serializers.FloatField()
     average_score = serializers.FloatField()
     feedback_avg = serializers.FloatField(required=False, allow_null=True, default=0)
@@ -93,6 +94,7 @@ class MonthlyReportSerializer(serializers.Serializer, ScoreMixin):
     emp_id = serializers.CharField()
     employee_full_name = serializers.CharField()
     department = serializers.CharField()
+    manager_full_name = serializers.CharField(required=False, allow_null=True, default="-")
     month = serializers.IntegerField()
     year = serializers.IntegerField()
     avg_score = serializers.FloatField()
@@ -124,6 +126,10 @@ class EmployeeHistorySerializer(serializers.Serializer, ScoreMixin):
     feedback_avg = serializers.FloatField(required=False, allow_null=True, default=0)
     remarks = serializers.CharField(allow_null=True, required=False)
     rank = serializers.IntegerField(allow_null=True, required=False)
+    manager_full_name = serializers.CharField(required=False, allow_null=True, default="-")
+    department = serializers.CharField(required=False, allow_null=True, default="-")
+    emp_id = serializers.CharField(required=False, allow_null=True, default="-")
+
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)

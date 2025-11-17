@@ -28,7 +28,6 @@ def generate_employee_performance_pdf(employee, evaluations, week=None):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     pdf.setTitle(f"Performance Report - {employee.user.emp_id}")
-    y_offset = 10
 
     # -----------------------------------------------------------
     # HEADER SECTION
@@ -41,9 +40,20 @@ def generate_employee_performance_pdf(employee, evaluations, week=None):
     pdf.setFont("Helvetica", 12)
     pdf.drawString(50, 755, f"Name: {employee.user.first_name} {employee.user.last_name}")
     pdf.drawString(50, 740, f"Department: {employee.department.name if employee.department else 'N/A'}")
+
+    # Manager Name
+    manager_obj = getattr(employee, "manager", None)
+    manager_full_name = (
+        f"{manager_obj.first_name} {manager_obj.last_name}".strip()
+        if manager_obj else "-"
+    )
+    pdf.drawString(50, 725, f"Manager: {manager_full_name}")     # ✅ ADDED
+
+    # Week
     if week:
-        pdf.drawString(50, 725 - y_offset, f"Week: {week}")
-    pdf.drawString(50, 710, f"Generated On: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        pdf.drawString(50, 710, f"Week: {week}")
+
+    pdf.drawString(50, 695, f"Generated On: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # -----------------------------------------------------------
     # TABLE HEADER

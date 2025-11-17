@@ -22,7 +22,7 @@ from django.http import HttpResponse
 from datetime import timedelta, datetime
 from itertools import chain
 import csv
-import logging
+from employee.models import Department
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -43,7 +43,69 @@ from .serializers import (
 from reports.utils.pdf_generator import generate_employee_performance_pdf
 from notifications.views import create_report_notification 
 
-logger = logging.getLogger(__name__)
+
+# ===========================================================
+# NORMALIZER — Convert backend records to frontend-friendly format
+# ===========================================================
+def normalize_report_rows(records):
+    """
+    Converts any report record into frontend-friendly format:
+    id, name, department, manager, score, rank
+    """
+
+    # 🔥 Fetch ALL departments once (code → full name)
+    department_map = {
+        d.code.upper(): d.name
+        for d in Department.objects.all()
+    }
+
+    normalized = []
+
+    for r in records:
+
+        # Pick score safely
+        def pick_score(r):
+            if r.get("total_score") is not None:
+                return r["total_score"]
+            if r.get("avg_score") is not None:
+                return r["avg_score"]
+            if r.get("average_score") is not None:
+                return r["average_score"]
+            if r.get("best_week_score") is not None:
+                return r["best_week_score"]
+            return 0
+
+        score_value = pick_score(r)
+
+        # Raw department value (code or name)
+        dept_raw = (
+            r.get("department")
+            or r.get("department_name")
+            or "-"
+        )
+
+        # 🔥 Convert department code → full name
+        dept_full = department_map.get(str(dept_raw).upper(), dept_raw)
+
+        normalized.append({
+            "id": r.get("emp_id") or r.get("id") or "-",
+            "name": (
+                r.get("employee_full_name")
+                or r.get("full_name")
+                or r.get("name")
+                or "-"
+            ),
+            "department": dept_full,  # <-- FIXED HERE
+            "manager": (
+                r.get("manager_full_name")
+                or r.get("manager")
+                or "-"
+            ),
+            "score": score_value,
+            "rank": r.get("rank") or "-",
+        })
+
+    return normalized
 
 
 # ===========================================================
@@ -71,16 +133,17 @@ class WeeklyReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        """Return consolidated weekly performance summary."""
         try:
             week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
             year = int(request.query_params.get("year", timezone.now().year))
             save_cache = request.query_params.get("save_cache", "false").lower() == "true"
 
+            # Fetch weekly performance in one query
             qs = (
                 PerformanceEvaluation.objects.filter(week_number=week, year=year)
-                .select_related("employee__user", "department")
+                .select_related("employee__user", "employee__department", "department")
                 .annotate(emp_id=F("employee__user__emp_id"))
+                .order_by("-total_score")   # Pre-sort for faster ranking
             )
 
             if not qs.exists():
@@ -89,70 +152,79 @@ class WeeklyReportView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            feedback_map = {
-                emp.id: float(get_feedback_average(emp) or 0.0)
-                for emp in Employee.objects.filter(id__in=qs.values_list("employee_id", flat=True))
-            }
+            # Collect employee IDs once
+            emp_ids = list(qs.values_list("employee_id", flat=True))
 
+            # 🔥 Fetch all feedback for these employees in 1 query (instead of hundreds)
+            all_feedback = list(chain(
+                GeneralFeedback.objects.filter(employee_id__in=emp_ids).values("employee_id", "rating"),
+                ManagerFeedback.objects.filter(employee_id__in=emp_ids).values("employee_id", "rating"),
+                ClientFeedback.objects.filter(employee_id__in=emp_ids).values("employee_id", "rating"),
+            ))
 
-            ranked = qs.annotate(
-                computed_rank=Window(
-                    expression=Rank(),
-                    order_by=F("total_score").desc(nulls_last=True)
+            # Build feedback map
+            feedback_map = {}
+            for fb in all_feedback:
+                feedback_map.setdefault(fb["employee_id"], []).append(fb["rating"])
+
+            # Average rating
+            for emp_id in feedback_map:
+                ratings = feedback_map[emp_id]
+                feedback_map[emp_id] = round(sum(ratings) / len(ratings), 2)
+
+            # Default 0.0 if no feedback
+            for emp_id in emp_ids:
+                feedback_map.setdefault(emp_id, 0.0)
+
+            # 🔥 Prepare response
+            result = []
+            rank_counter = 1
+
+            for p in qs:
+                emp = p.employee
+                manager = getattr(emp, "manager", None)
+
+                manager_full = (
+                    f"{manager.user.first_name} {manager.user.last_name}".strip()
+                    if manager else "-"
                 )
-            )
 
-            result = [
-                {
-                    "emp_id": p.employee.user.emp_id,
-                    "employee_full_name": f"{p.employee.user.first_name} {p.employee.user.last_name}".strip(),
-                    "department": p.department.name if p.department else "-",
+                result.append({
+                    "emp_id": emp.user.emp_id,
+                    "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                    "department": emp.department.name if emp.department else "-",
+                    "manager_full_name": manager_full,
                     "total_score": float(p.total_score),
                     "average_score": float(p.average_score),
-                    "feedback_avg": float(feedback_map.get(p.employee.id, 0.0) or 0.0),
+                    "score": float(p.total_score),
+                    "feedback_avg": float(feedback_map.get(emp.id, 0.0)),
                     "week_number": week,
                     "year": year,
-                    "rank": int(p.computed_rank),
+                    "rank": rank_counter,
                     "remarks": p.remarks or "",
-                }
-                for p in ranked
-            ]
+                })
 
+                rank_counter += 1
+
+            # Save cache (optional)
             if save_cache:
                 CachedReport.objects.update_or_create(
                     report_type="weekly",
                     year=year,
                     week_number=week,
-                    defaults={
-                        "payload": {"records": result},
-                        "generated_by": request.user,
-                    },
+                    defaults={"payload": {"records": result}, "generated_by": request.user},
                 )
-
-            # Create notification for weekly report generation
-            try:
-                message = f"Weekly performance report generated for Week {week}, {year}."
-                create_report_notification(
-                    triggered_by=request.user,
-                    report_type="Weekly Report",
-                    link=f"/reports/weekly/?week={week}&year={year}",
-                    message=message,
-                    department=None,
-                )
-            except Exception as e:
-                logger.error(f"Weekly report notification failed: {e}")
 
             return Response(
                 {
                     "evaluation_period": f"Week {week}, {year}",
                     "total_records": len(result),
-                    "records": WeeklyReportSerializer(result, many=True).data,
+                    "records": normalize_report_rows(result),
                 },
                 status=status.HTTP_200_OK,
             )
 
         except Exception as e:
-            logger.exception("WeeklyReport Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -202,17 +274,42 @@ class MonthlyReportView(APIView):
                     fb_avg = get_feedback_average(emp)
 
 
+                manager_obj = getattr(emp, "manager", None)
+
+                manager_full_name = (
+                    f"{manager_obj.user.first_name} {manager_obj.user.last_name}".strip()
+                    if manager_obj else "-"
+                )
+
+
                 data.append({
                     "emp_id": emp.user.emp_id,
                     "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
                     "department": emp.department.name if emp.department else "-",
+                    "manager_full_name": manager_full_name, 
                     "month": month,
                     "year": year,
                     "avg_score": float(avg_score or 0.0),
+                    "score": float(avg_score or 0),
                     "feedback_avg": fb_avg,
                     "best_week": best_week_obj.week_number,
                     "best_week_score": float(best_week_obj.average_score or 0.0),
                 })
+
+            # -----------------------------------------------------------
+            # SORT MONTHLY DATA (Fix #5)
+            # -----------------------------------------------------------
+            data.sort(
+                key=lambda x: (
+                    -(x.get("avg_score") or 0),
+                    -(x.get("feedback_avg") or 0),
+                    x.get("emp_id") or ""
+                )
+            )
+
+            # Assign rank after sorting
+            for idx, row in enumerate(data, start=1):
+                row["rank"] = idx
 
             if save_cache:
                 CachedReport.objects.update_or_create(
@@ -236,20 +333,23 @@ class MonthlyReportView(APIView):
                     department=None,
                 )
             except Exception as e:
-                logger.error(f"Monthly report notification failed: {e}")
+                pass
+
+            serialized = MonthlyReportSerializer(data, many=True).data
 
             return Response(
-                {
-                    "evaluation_period": f"Month {month}, {year}",
-                    "total_records": len(data),
-                    "records": MonthlyReportSerializer(data, many=True).data,
-                },
-                status=status.HTTP_200_OK,
+            {
+                "evaluation_period": f"Month {month}, {year}",
+                "total_records": len(serialized),
+                "records": normalize_report_rows(serialized),
+            },
+            status=status.HTTP_200_OK,
             )
 
+
         except Exception as e:
-            logger.exception("MonthlyReport Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 # ===========================================================
@@ -260,7 +360,10 @@ class DepartmentReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        department_name = request.query_params.get("department_name")
+        department_name = (
+            request.query_params.get("department") 
+            or request.query_params.get("department_name")
+        )
         week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
         year = int(request.query_params.get("year", timezone.now().year))
 
@@ -268,7 +371,10 @@ class DepartmentReportView(APIView):
             return Response({"error": "Please provide department_name."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            employees = Employee.objects.filter(department__name__iexact=department_name)
+            employees = Employee.objects.filter(
+                Q(department__name__iexact=department_name) |
+                Q(department__code__iexact=department_name)
+                )
             if not employees.exists():
                 return Response({"message": f"No employees found in department {department_name}."}, status=status.HTTP_200_OK)
 
@@ -289,12 +395,17 @@ class DepartmentReportView(APIView):
             for perf in ranked:
                 emp = perf.employee
 
-                # SAFE manager name (optional field)
                 manager_obj = getattr(emp, "manager", None)
-                if manager_obj:
-                    manager_full_name = f"{manager_obj.first_name} {manager_obj.last_name}".strip()
-                else:
-                    manager_full_name = "-"
+
+                manager_full_name = (
+                    f"{manager_obj.user.first_name} {manager_obj.user.last_name}".strip()
+                    if manager_obj else "-"
+                )
+
+                manager_full_name = "-"
+
+                if hasattr(emp, "manager") and emp.manager and hasattr(emp.manager, "user"):
+                    manager_full_name = emp.manager.user.get_full_name()
 
                 records.append({
                     "department_name": department_name,
@@ -303,6 +414,7 @@ class DepartmentReportView(APIView):
                     "manager_full_name": manager_full_name,  
                     "total_score": float(perf.total_score),
                     "average_score": float(perf.average_score),
+                    "score": float(perf.total_score),
                     "feedback_avg": float(feedback_map.get(emp.id, 0.0) or 0.0),
                     "week_number": week,                    
                     "year": year,                            
@@ -320,12 +432,17 @@ class DepartmentReportView(APIView):
             )
 
             return Response(
-                {"department_name": department_name, "evaluation_period": f"Week {week}, {year}", "total_employees": len(records), "records": records},
+                {
+                    "department_name": department_name,
+                    "evaluation_period": f"Week {week}, {year}",
+                    "total_employees": len(records),
+                    "records": normalize_report_rows(records),
+                },
                 status=status.HTTP_200_OK,
             )
 
+
         except Exception as e:
-            logger.exception(f"DepartmentReport Error: {str(e)}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -337,16 +454,34 @@ class ManagerReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        manager_id = request.query_params.get("manager_id")
+        manager_id = (
+            request.query_params.get("manager")
+            or request.query_params.get("manager_id")
+        )
         week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
         year = int(request.query_params.get("year", timezone.now().year))
 
         if not manager_id:
-            return Response({"error": "manager_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Manager ID is required (manager or manager_id)."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            # === Flexible Manager Matching Logic ===
+            manager_qs = Employee.objects.filter(
+                Q(user__emp_id__iexact=manager_id) |
+                Q(user__email__iexact=manager_id) |
+                Q(user__first_name__icontains=manager_id) |
+                Q(user__last_name__icontains=manager_id) |
+                Q(user__first_name__icontains=manager_id.split(" ")[0])  # partial match
+            )
+
+            manager_obj = manager_qs.first()
+
+            if not manager_obj:
+                return Response({"error": "Manager not found."}, status=status.HTTP_404_NOT_FOUND)
+
             # Employees under this manager
-            employees = Employee.objects.filter(manager__emp_id__iexact=manager_id)
+            employees = Employee.objects.filter(manager=manager_obj)
+
 
             if not employees.exists():
                 return Response({"message": "No employees found under this manager."}, status=status.HTTP_200_OK)
@@ -373,33 +508,47 @@ class ManagerReportView(APIView):
             records = []
             for perf in ranked:
                 emp = perf.employee
+
+                manager_obj = getattr(emp, "manager", None)
+
+                manager_full_name = (
+                    f"{manager_obj.user.first_name} {manager_obj.user.last_name}".strip()
+                    if manager_obj else "-"
+                )
+
                 records.append({
                     "emp_id": emp.user.emp_id,
                     "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
                     "department": emp.department.name if emp.department else "-",
+                    "manager_full_name": manager_full_name, 
                     "total_score": float(perf.total_score),
                     "average_score": float(perf.average_score),
+                    "score": float(perf.total_score),
                     "feedback_avg": float(feedback_map.get(emp.id, 0.0)),
                     "week_number": week,
                     "year": year,
                     "rank": int(perf.computed_rank),
-                    "remarks": perf.remarks or ""
+                    "remarks": perf.remarks or "",
                 })
+
+
+            # Serialize the records to ensure consistent rounding + formatting
+            serialized_records = ManagerReportSerializer(records, many=True).data
 
             return Response({
                 "manager_id": manager_id,
                 "evaluation_period": f"Week {week}, {year}",
-                "total_employees": len(records),
-                "records": records
+                "total_employees": len(serialized_records),
+                "records": normalize_report_rows(serialized_records)
             }, status=status.HTTP_200_OK)
 
+
         except Exception as e:
-            logger.exception("ManagerReport Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ===========================================================
-# 5. EXCEL EXPORT (Weekly + Monthly) — Final Version
+# 5. EXCEL EXPORT
 # ===========================================================
 class ExportWeeklyExcelView(APIView):
     """Exports weekly performance data to Excel."""
@@ -472,11 +621,18 @@ class ExportWeeklyExcelView(APIView):
 
 
             for perf in ranked:
+                manager_obj = getattr(perf.employee, "manager", None)
+                manager_full_name = (
+                    f"{manager_obj.user.first_name} {manager_obj.user.last_name}".strip()
+                    if manager_obj else "-"
+                )
+
                 ws.append(
                     [
                         perf.employee.user.emp_id,
                         f"{perf.employee.user.first_name} {perf.employee.user.last_name}",
                         perf.department.name if perf.department else "-",
+                        manager_full_name,                  # ✅ ADDED
                         float(perf.total_score),
                         float(perf.average_score),
                         feedback_map.get(perf.employee.id, 0.0),
@@ -484,6 +640,7 @@ class ExportWeeklyExcelView(APIView):
                         perf.remarks or "",
                     ]
                 )
+
 
             # Auto-adjust column width
             for col in ws.columns:
@@ -506,7 +663,6 @@ class ExportWeeklyExcelView(APIView):
             return response
 
         except Exception as e:
-            logger.exception("ExportWeeklyExcel Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -546,6 +702,7 @@ class ExportMonthlyExcelView(APIView):
                 "Emp ID",
                 "Employee Name",
                 "Department",
+                "Manager",
                 "Average Score",
                 "Feedback Avg",
                 "Best Week",
@@ -586,17 +743,26 @@ class ExportMonthlyExcelView(APIView):
                     fb_avg = get_feedback_average(emp)
 
 
+                manager_obj = getattr(emp, "manager", None)
+                manager_full_name = (
+                    f"{manager_obj.user.first_name} {manager_obj.user.last_name}".strip()
+                    if manager_obj else "-"
+                )
+
+
                 ws.append(
                     [
                         emp.user.emp_id,
                         f"{emp.user.first_name} {emp.user.last_name}",
                         emp.department.name if emp.department else "-",
+                        manager_full_name,                 # ✅ Added
                         float(avg_score or 0.0),
                         float(fb_avg or 0.0),
                         best_week_obj.week_number,
                         float(best_week_obj.average_score or 0.0),
                     ]
                 )
+
 
 
             # Auto-fit columns
@@ -619,7 +785,6 @@ class ExportMonthlyExcelView(APIView):
             return response
 
         except Exception as e:
-            logger.exception("ExportMonthlyExcel Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -675,13 +840,11 @@ class PrintPerformanceReportView(APIView):
                     department=employee.department,
                 )
             except Exception as e:
-                logger.warning(f"PDF export notification failed: {e}")
+                pass
 
-            logger.info(f"PDF performance report generated for {emp_id}, Week {week}, {year}.")
             return pdf_response
 
         except Exception as e:
-            logger.exception("PrintPerformanceReport Error: %s", str(e))
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -712,7 +875,6 @@ class CachedReportArchiveView(APIView):
         report = get_object_or_404(CachedReport, pk=pk)
         report.is_archived = True
         report.save(update_fields=["is_archived"])
-        logger.info(f"Cached report {report.id} archived by {request.user}.")
         return Response(
             {"message": f"Report {report.id} archived successfully."},
             status=status.HTTP_200_OK,
@@ -727,7 +889,6 @@ class CachedReportRestoreView(APIView):
         report = get_object_or_404(CachedReport, pk=pk)
         report.is_archived = False
         report.save(update_fields=["is_archived"])
-        logger.info(f"Cached report {report.id} restored by {request.user}.")
         return Response(
             {"message": f"Report {report.id} restored successfully."},
             status=status.HTTP_200_OK,
