@@ -11,7 +11,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.contrib.auth import get_user_model
 from rest_framework.pagination import PageNumberPagination
 from django.db import models, transaction
-from django.db.models import Q
+from django.db.models import Q, F, Func, Value, CharField, DateField
 
 from .models import Department, Employee
 from .serializers import (
@@ -64,6 +64,15 @@ class DepartmentViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if include_inactive == "true" and (user.is_superuser or getattr(user, "role", "") == "Admin"):
             return qs
+        
+        qs = qs.annotate(
+            full_name=models.functions.Concat(
+                "user__first_name",
+                models.Value(" "),
+                "user__last_name"
+            )
+        )
+
         return qs.filter(is_active=True)
 
     def _is_admin(self, request):
@@ -115,7 +124,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         "user__first_name", "user__last_name", "user__emp_id",
         "designation", "contact_number", "department__name"
     ]
-    ordering_fields = ["joining_date", "user__first_name", "user__emp_id"]
+    ordering_fields = ["joining_sort", "user__first_name", "user__last_name", "user__emp_id", "full_name"]
 
     def get_serializer_class(self):
         if self.action in ["create", "update", "partial_update"]:
@@ -160,6 +169,20 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         status_param = request.query_params.get("status")
         if status_param:
             qs = qs.filter(status__iexact=status_param.strip())
+
+        qs = qs.annotate(
+            full_name=models.functions.Concat(
+                "user__first_name",
+                models.Value(" "),
+                "user__last_name"
+            ),
+            joining_sort=Func(
+                F("joining_date"),
+                Value("%d-%m-%Y"),
+                function="STR_TO_DATE",
+                output_field=DateField()
+            )
+        )
 
         return qs
  
