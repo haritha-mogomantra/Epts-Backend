@@ -176,12 +176,13 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 models.Value(" "),
                 "user__last_name"
             ),
-            joining_sort=Func(
-                F("joining_date"),
-                Value("%d-%m-%Y"),
-                function="STR_TO_DATE",
-                output_field=DateField()
-            )
+            #joining_sort=Func(
+                #F("joining_date"),
+               # Value("%d-%m-%Y"),
+                #function="STR_TO_DATE",
+                #output_field=DateField()
+            #)
+            joining_sort=F("joining_date")
         )
 
         return qs

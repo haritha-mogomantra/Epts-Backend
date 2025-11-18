@@ -195,7 +195,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     manager = serializers.CharField(write_only=True, required=False, allow_blank=True)
     emp_id = serializers.ReadOnlyField(source="user.emp_id")
 
-    # ✅ Allow multiple joining_date input formats (handles all business cases)
+    # Allow multiple joining_date input formats (handles all business cases)
     joining_date = serializers.DateField(
         input_formats=["%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"],
         required=True
@@ -210,14 +210,37 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_first_name(self, value):
-        if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
-            raise serializers.ValidationError("First name must contain only alphabets and spaces.")
-        return value.strip().title()
+        value = value.strip()
+
+        # Only alphabets
+        if not re.match(r"^[A-Za-z]+$", value):
+            raise serializers.ValidationError(
+                "First name must contain only alphabets (A–Z)."
+            )
+
+        # Minimum 3 letters
+        if len(value) < 3:
+            raise serializers.ValidationError(
+                "First name must contain at least 3 letters."
+            )
+
+        return value.title()
 
     def validate_last_name(self, value):
-        if not value or not re.match(r"^[A-Za-z\s]+$", value.strip()):
-            raise serializers.ValidationError("Last name must contain only alphabets and spaces.")
-        return value.strip().title()
+        value = value.strip()
+
+        # Last name is mandatory
+        if not value:
+            raise serializers.ValidationError("Last name is required.")
+
+        # Only alphabets
+        if not re.match(r"^[A-Za-z]+$", value):
+            raise serializers.ValidationError(
+                "Last name must contain only alphabets (A–Z)."
+            )
+
+        return value.title()
+
 
     def validate_dob(self, value):
         today = date.today()
@@ -378,8 +401,6 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             instance.department = department
 
         if manager_emp_id and manager_emp_id.strip():
-            from django.db.models import Q
-
             name = manager_emp_id.strip()
             manager = Employee.objects.filter(user__emp_id__iexact=name, is_deleted=False).first()
 
@@ -605,9 +626,26 @@ class EmployeeCSVUploadSerializer(serializers.Serializer):
         if not normalized_rows:
             raise serializers.ValidationError({"error": "CSV file is empty."})
 
-        # ✅ Validate headers
-        required_cols = ["First Name", "Last Name", "Email", "Department Code", "Role", "Joining Date"]
-        missing = [col for col in required_cols if col not in normalized_rows[0]]
+        # ----- FIXED HEADER DETECTION ----------
+        # Normalize entire header map (lowercase keys → original keys)
+        normalized_header_map = {k.strip().lower(): k for k in normalized_rows[0].keys()}
+
+        # Mandatory fields (case insensitive now)
+        required_cols = ["first name", "last name", "email", "role", "joining date"]
+        missing = [col for col in required_cols if col not in normalized_header_map]
+        if missing:
+            raise serializers.ValidationError({"error": f"CSV missing columns: {', '.join(missing)}"})
+
+        # Department column logic (case-insensitive)
+        if "department code" in normalized_header_map:
+            dept_key = normalized_header_map["department code"]
+        elif "department" in normalized_header_map:
+            dept_key = normalized_header_map["department"]
+        else:
+            raise serializers.ValidationError({
+                "error": "CSV must contain a 'Department Code' or 'Department' column."
+            })
+
         if missing:
             raise serializers.ValidationError({"error": f"CSV must contain: {', '.join(required_cols)}"})
 
@@ -621,7 +659,7 @@ class EmployeeCSVUploadSerializer(serializers.Serializer):
                     email = row.get("Email", "").lower()
                     first_name = row.get("First Name", "").strip().title()
                     last_name = row.get("Last Name", "").strip().title()
-                    dept_code = row.get("Department Code", "").strip()
+                    dept_code = row.get(dept_key, "").strip()
                     role = row.get("Role", "").capitalize()
                     joining_date_str = row.get("Joining Date", "").strip()
                     contact_number = row.get("Contact Number") or None
@@ -645,21 +683,58 @@ class EmployeeCSVUploadSerializer(serializers.Serializer):
                         continue
                     seen_emails.add(email)
 
-                    # 4️⃣ Department Validation
+                    # Department Validation
+                    #department = Department.objects.filter(
+                        #models.Q(code__iexact=dept_code)
+                        #| models.Q(name__iexact=dept_code)
+                        #| models.Q(id__iexact=dept_code)
+                    #).first()
+                    # Normalize department input
+                    original_dept = dept_code
+                    dept_code = dept_code.strip().lower()
+
+                    # Try direct match by code or full name
                     department = Department.objects.filter(
-                        models.Q(code__iexact=dept_code)
-                        | models.Q(name__iexact=dept_code)
-                        | models.Q(id__iexact=dept_code)
+                        Q(code__iexact=dept_code) |
+                        Q(name__iexact=dept_code) |
+                        Q(code__icontains=dept_code) |
+                        Q(name__icontains=dept_code)
                     ).first()
+
+                    # If still not found, try advanced matching
                     if not department:
-                        errors.append(f"Row {i}: Department '{dept_code}' not found.")
+                        for dept in Department.objects.all():
+                            name = dept.name.lower()
+                            code = dept.code.lower()
+
+                            # Matches 'eng', 'engg', 'engine', etc.
+                            if dept_code in name or dept_code in code:
+                                department = dept
+                                break
+
+                            # If CSV has 'Engineering' and code is ENG
+                            if name.startswith(dept_code) or code.startswith(dept_code):
+                                department = dept
+                                break
+
+                    # If still not found → report error
+                    if not department:
+                        errors.append(f"Row {i}: Department '{original_dept}' not found.")
                         continue
+
+                    # Check active status
                     if not department.is_active:
                         errors.append(f"Row {i}: Department '{department.name}' is inactive.")
                         continue
 
-                    # 5️⃣ Validate Email uniqueness in DB
-                    if User.objects.filter(email__iexact=email).exists():
+                    # Validate Email uniqueness in DB
+                    #if User.objects.filter(email__iexact=email).exists():
+
+                    if User.objects.filter(
+                        Q(email__iexact=email),
+                        ~Q(employee_profile__is_deleted=True)
+                    ).exists():
+
                         errors.append(f"Row {i}: Email '{email}' already exists in system.")
                         continue
 

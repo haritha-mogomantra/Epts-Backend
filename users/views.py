@@ -233,35 +233,35 @@ class ChangePasswordView(APIView):
         new_password = request.data.get("new_password")
         confirm_password = request.data.get("confirm_password")
 
-        # 1️⃣ Validate required fields
+        # Validate required fields
         if not all([old_password, new_password, confirm_password]):
             return Response(
                 {"message": "All fields (old_password, new_password, confirm_password) are required.", "status": "error"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 2️⃣ Validate old password
+        # Validate old password
         if not user.check_password(old_password):
             return Response(
                 {"message": "Old password is incorrect.", "status": "error"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3️⃣ Prevent using the same password
+        # Prevent using the same password
         if old_password == new_password:
             return Response(
                 {"message": "New password cannot be the same as the old password.", "status": "error"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 4️⃣ Match confirmation
+        # Match confirmation
         if new_password != confirm_password:
             return Response(
                 {"message": "New password and confirm password do not match.", "status": "error"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 5️⃣ Enforce password complexity
+        # Enforce password complexity
         pattern = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*#?&])[A-Za-z\d@$!%*#?&]{8,}$"
         if not re.match(pattern, new_password):
             return Response(
@@ -269,11 +269,26 @@ class ChangePasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 6️⃣ Attempt password change — catch password-reuse validation
+        # Attempt password change — catch password-reuse validation
         try:
-            user.set_password(new_password)  # uses PasswordHistory logic in your model
+            user.set_password(new_password)
+
+            # Reset lock counters after changing password
             user.force_password_change = False
-            user.save(update_fields=["password", "force_password_change"])
+            user.temp_password = None
+            user.failed_login_attempts = 0
+            user.account_locked = False
+            user.locked_at = None
+
+            user.save(update_fields=[
+                "password",
+                "force_password_change",
+                "temp_password",
+                "failed_login_attempts",
+                "account_locked",
+                "locked_at"
+            ])
+
         except ValidationError as ve:
             return Response(
                 {"message": str(ve.message), "status": "error"},
@@ -343,7 +358,7 @@ class RoleListView(APIView):
 # 7. USER LIST (Admin Only)
 # ===========================================================
 class UserPagination(PageNumberPagination):
-    page_size = 20
+    page_size = 10
 
 
 class UserListView(generics.ListAPIView):
@@ -537,7 +552,20 @@ def regenerate_password(request, emp_id=None):
     user.set_password(new_password)
     user.temp_password = new_password
     user.force_password_change = True
-    user.save(update_fields=["password", "temp_password", "force_password_change"])
+
+    # Reset lock counters whenever admin regenerates password
+    user.failed_login_attempts = 0
+    user.account_locked = False
+    user.locked_at = None
+
+    user.save(update_fields=[
+        "password",
+        "temp_password",
+        "force_password_change",
+        "failed_login_attempts",
+        "account_locked",
+        "locked_at"
+    ])
 
     # Log or send via email
     if hasattr(settings, "EMAIL_BACKEND") and "console" in settings.EMAIL_BACKEND:
@@ -598,6 +626,21 @@ class AdminUserListView(generics.ListAPIView):
     search_fields = ["username", "emp_id", "email", "first_name", "last_name", "role"]
     ordering_fields = ["emp_id", "role", "date_joined", "last_login"]
 
+
+    def get_queryset(self):
+    # Exclude deleted employees & inactive users
+        return (
+            User.objects
+            .select_related("department", "employee_profile")
+            .filter(
+                is_active=True,
+                employee_profile__is_deleted=False
+            )
+            .order_by("emp_id")
+        )
+
+
+
     def list(self, request, *args, **kwargs):
         user_info = getattr(request.user, "emp_id", "Anonymous")
         return super().list(request, *args, **kwargs)
@@ -608,6 +651,7 @@ class AdminUserListView(generics.ListAPIView):
         context = super().get_serializer_context()
         context["request"] = self.request
         return context
+
 
 
 
