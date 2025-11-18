@@ -60,19 +60,15 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+
         include_inactive = self.request.query_params.get("include_inactive", "").lower()
         user = self.request.user
+
+        # Admin can view all departments
         if include_inactive == "true" and (user.is_superuser or getattr(user, "role", "") == "Admin"):
             return qs
-        
-        qs = qs.annotate(
-            full_name=models.functions.Concat(
-                "user__first_name",
-                models.Value(" "),
-                "user__last_name"
-            )
-        )
 
+        # Default: only active departments
         return qs.filter(is_active=True)
 
     def _is_admin(self, request):
@@ -176,13 +172,12 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 models.Value(" "),
                 "user__last_name"
             ),
-            #joining_sort=Func(
-                #F("joining_date"),
-               # Value("%d-%m-%Y"),
-                #function="STR_TO_DATE",
-                #output_field=DateField()
-            #)
-            joining_sort=F("joining_date")
+            joining_sort=Func(
+                F("joining_date"),
+                Value("%d-%m-%Y"),
+                function="STR_TO_DATE",
+                output_field=DateField()
+            )
         )
 
         return qs

@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Max, F, Avg, Window, Count
+from django.db.models import Max, F, Avg, Window, Count, Q
 from django.db.models.functions import Rank
 from django.db import IntegrityError
 from django.utils import timezone
@@ -351,6 +351,14 @@ class PerformanceSummaryView(APIView):
                 "employee__user__last_name"
             )
 
+            search = request.query_params.get("search", "").strip()
+            if search:
+                qs = qs.filter(
+                    Q(employee__user__emp_id__icontains=search) |
+                    Q(employee__user__first_name__icontains=search) |
+                    Q(employee__user__last_name__icontains=search) |
+                    Q(department__name__icontains=search)
+                )
 
 
             monday = date.fromisocalendar(int(req_year), int(req_week), 1)
@@ -380,6 +388,16 @@ class PerformanceSummaryView(APIView):
                 "employee__user__first_name",
                 "employee__user__last_name"
             )
+
+            search = request.query_params.get("search", "").strip()
+            if search:
+                qs = qs.filter(
+                    Q(employee__user__emp_id__icontains=search) |
+                    Q(employee__user__first_name__icontains=search) |
+                    Q(employee__user__last_name__icontains=search) |
+                    Q(department__name__icontains=search)
+                )
+
 
 
             evaluation_period = f"Week {latest_week}, {latest_year}"
