@@ -53,7 +53,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all().order_by("name")
     serializer_class = DepartmentSerializer
     lookup_field = "code"
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "code"]
     ordering_fields = ["name", "created_at", "code"]
@@ -111,7 +111,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 # ===========================================================
 class EmployeeViewSet(viewsets.ModelViewSet):
     queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members").filter(is_deleted=False)
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
     pagination_class = DefaultPagination
     lookup_field = "user__emp_id"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -268,39 +268,55 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 # ADMIN PROFILE VIEW
 # ===========================================================
 class AdminProfileView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
+
         if getattr(user, "role", "") != "Admin":
-            return Response({"error": "Only Admins can access this API."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Only Admins can access this API."},
+                            status=status.HTTP_403_FORBIDDEN)
+
         employee = getattr(user, "employee_profile", None)
         if not employee:
-            return Response({"error": "Employee record not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Employee profile not found."},
+                            status=status.HTTP_404_NOT_FOUND)
+
         serializer = AdminProfileSerializer(employee, context={"request": request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = serializer.data
+
+        return Response({
+            "personal": data.get("personal", {}),
+            "professional": data.get("professional", {}),
+            "address": data.get("address", {})
+        }, status=status.HTTP_200_OK)
 
     @transaction.atomic
     def patch(self, request):
         user = request.user
+
         if getattr(user, "role", "") != "Admin":
-            return Response({"error": "Only Admins can update profile."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Only Admins can update profile."},
+                            status=status.HTTP_403_FORBIDDEN)
 
         employee = getattr(user, "employee_profile", None)
         if not employee:
-            return Response({"error": "Employee record not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Employee profile not found."},
+                            status=status.HTTP_404_NOT_FOUND)
 
         serializer = AdminProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    def put(self, request):
+        return self.patch(request)
 
 # ===========================================================
 # MANAGER PROFILE VIEW
 # ===========================================================
 class ManagerProfileView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
@@ -332,11 +348,11 @@ class ManagerProfileView(APIView):
 
 
 # ===========================================================
-# EMPLOYEE PROFILE VIEW (NEW)
+# EMPLOYEE PROFILE VIEW
 # ===========================================================
 class EmployeeProfileView(APIView):
     """API for Employee personal profile (view/update)."""
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
@@ -373,7 +389,7 @@ class EmployeeProfileView(APIView):
 # EMPLOYEE BULK CSV UPLOAD VIEW
 # ===========================================================
 class EmployeeCSVUploadView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):

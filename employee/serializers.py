@@ -472,9 +472,10 @@ class AdminProfileSerializer(serializers.ModelSerializer):
         model = Employee
         fields = [
             "emp_id", "first_name", "last_name", "email", "role",
-            "department", "department_code", "designation", "joining_date", "status",
-            "contact_number", "dob", "profile_picture", "profile_picture_url",
-            "address_line1", "city", "state", "pincode",
+            "department", "department_code", "designation", "project_name", "joining_date", "status",
+            "contact_number", "gender", "dob", 
+            "profile_picture", "profile_picture_url",
+            "address_line1", "address_line2", "city", "state", "pincode",
         ]
         read_only_fields = ["emp_id", "department", "role", "status"]
 
@@ -498,6 +499,39 @@ class AdminProfileSerializer(serializers.ModelSerializer):
             setattr(instance, field, value)
         instance.save()
         return instance
+    
+    def to_representation(self, instance):
+        d = super().to_representation(instance)
+
+        return {
+            "personal": {
+                "emp_id": d.get("emp_id"),
+                "first_name": d.get("first_name"),
+                "last_name": d.get("last_name"),
+                "gender": d.get("gender"),
+                "dob": d.get("dob"),
+                "contact_number": d.get("contact_number"),
+                "email": d.get("email"),
+                "profile_picture_url": d.get("profile_picture_url"),
+            },
+            "professional": {
+                "department": d.get("department"),
+                "department_code": d.get("department_code"),
+                "role": d.get("role"),
+                "designation": d.get("designation"),
+                "project_name": d.get("project_name") if "project_name" in d else None,
+                "joining_date": d.get("joining_date"),
+                "status": d.get("status"),
+            },
+            "address": {
+                "address_line1": d.get("address_line1"),
+                "address_line2": d.get("address_line2"),
+                "city": d.get("city"),
+                "state": d.get("state"),
+                "pincode": d.get("pincode"),
+            }
+        }
+
 
 
 # ===========================================================

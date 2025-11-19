@@ -60,13 +60,13 @@ class ObtainTokenPairView(TokenObtainPairView):
             serializer.is_valid(raise_exception=True)
 
         except Exception as e:
-            # 🧠 Extract and format specific error messages
+            # Extract and format specific error messages
             error_text = str(e)
 
             # Normalize text for easier matching
             error_lower = error_text.lower()
 
-            # 🧩 Logic for clean, context-aware messages
+            # Logic for clean, context-aware messages
             if "account locked" in error_lower:
                 message = "Account locked. Try again after 2 hours."
             elif "too many failed attempts" in error_lower:
@@ -97,23 +97,31 @@ class ObtainTokenPairView(TokenObtainPairView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ✅ Success block
+        # Success block
         data = serializer.validated_data
         user_data = data.get("user", {})
+
+        employee = Employee.objects.filter(user__emp_id=user_data.get("emp_id")).first()
+
+        first_name = employee.user.first_name if employee else ""
+        last_name = employee.user.last_name if employee else ""
 
         return Response(
             {
                 "success": True,
-                "token": data.get("access"),       # access token
-                "refresh": data.get("refresh"),    # refresh token
+                "token": data.get("access"),
+                "refresh": data.get("refresh"),
                 "role": user_data.get("role"),
                 "username": user_data.get("username"),
                 "emp_id": user_data.get("emp_id"),
-                "message": "Login successful.",
+
+                # New fields for frontend header
+                "first_name": first_name,
+                "last_name": last_name,
+                "full_name": f"{first_name} {last_name}".strip(),
             },
             status=status.HTTP_200_OK,
         )
-
 
 # ===========================================================
 # 2. REFRESH TOKEN
@@ -669,30 +677,47 @@ from rest_framework.response import Response
 def get_employee_by_id(request, emp_id):
     """
     GET /api/employees/employee/<emp_id>/
-    Returns basic employee details used by PerformanceMetrics frontend.
+    Full Employee Profile Response
     """
     try:
-        # Try to get Employee by emp_id
-        employee = Employee.objects.select_related("user", "department", "manager").get(emp_id__iexact=emp_id)
+        employee = Employee.objects.select_related("user", "department", "manager").get(
+            emp_id__iexact=emp_id
+        )
 
-        manager_name = None
-        if getattr(employee, "manager", None):
-            # manager is Employee instance — attempt to derive name from related user
-            mgr_user = getattr(employee.manager, "user", None)
-            if mgr_user:
-                manager_name = f"{mgr_user.first_name or ''} {mgr_user.last_name or ''}".strip()
-            else:
-                manager_name = getattr(employee.manager, "full_name", None) or str(employee.manager)
+        user = employee.user
 
         return Response({
-            "id": employee.emp_id,
-            "firstname": getattr(employee.user, "first_name", "") or getattr(employee, "firstname", ""),
-            "lastname": getattr(employee.user, "last_name", "") or getattr(employee, "lastname", ""),
-            "designation": employee.department.name if getattr(employee, "department", None) else "",
-            "manager": manager_name or "N/A",
-        }, status=status.HTTP_200_OK)
+            # PERSONAL DETAILS
+            "emp_id": employee.emp_id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "gender": employee.gender,
+            "contact_number": employee.contact_number,
+            "dob": employee.dob,
+            "profile_picture_url": employee.profile_picture_url,
+
+            # PROFESSIONAL DETAILS
+            "role": employee.role,
+            "department": employee.department.name if employee.department else None,
+            "department_code": employee.department.code if employee.department else None,
+            "designation": employee.designation,
+            "project_name": employee.project_name,
+            "joining_date": employee.joining_date,
+            "manager_name": (
+                employee.manager.user.get_full_name()
+                if employee.manager and employee.manager.user else None
+            ),
+            "reporting_manager_name": employee.reporting_manager_name,
+
+            # ADDRESS DETAILS
+            "address_line1": employee.address_line1,
+            "address_line2": employee.address_line2,
+            "city": employee.city,
+            "state": employee.state,
+            "pincode": employee.pincode,
+
+        }, status=200)
 
     except Employee.DoesNotExist:
-        return Response({"error": "Employee not found."}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Employee not found."}, status=404)

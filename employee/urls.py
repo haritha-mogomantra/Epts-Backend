@@ -11,6 +11,7 @@ from .views import (
     ManagerProfileView,
     EmployeeProfileView,
 )
+from users.views import get_employee_by_id
 
 # -----------------------------------------------------------
 # App Namespace
@@ -61,5 +62,6 @@ urlpatterns = [
     # Profile APIs (role-based)
     path("admin/profile/", AdminProfileView.as_view(), name="admin_profile"),
     path("manager/profile/", ManagerProfileView.as_view(), name="manager_profile"),
-    path("profile/", EmployeeProfileView.as_view(), name="employee_profile"),  # ✅ NEW
+    path("profile/", EmployeeProfileView.as_view(), name="employee_profile"),
+    path("employees/employee/<str:emp_id>/", get_employee_by_id, name="get_employee_by_id"),
 ]

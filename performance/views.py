@@ -88,11 +88,7 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
 
         # If both provided -> filter by exact week/year
         if week and year:
-            return qs.filter(week_number=week, year=year).select_related("employee__user", "department").order_by(
-                "-total_score",
-                "employee__user__first_name",
-                "employee__user__last_name"
-            )
+            return qs.filter(week_number=week, year=year).select_related("employee__user", "department")
 
 
         # If only week provided -> try to find that week in the latest year that contains it
@@ -105,37 +101,23 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
                 .first()
             )
             if candidate:
-                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department").order_by(
-                    "-total_score",
-                    "employee__user__first_name",
-                    "employee__user__last_name"
-                )
+                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department")
+            
             # fallback: filter by week number across years (rare)
-            return qs.filter(week_number=week).select_related("employee__user", "department").order_by(
-                "-total_score",
-                "employee__user__first_name",
-                "employee__user__last_name"
-            )
+            return qs.filter(week_number=week).select_related("employee__user", "department")
+
 
 
         # If only year provided -> return entire year (all weeks)
         if year and not week:
-            return qs.filter(year=year).select_related("employee__user", "department").order_by(
-                "-total_score",
-                "employee__user__first_name",
-                "employee__user__last_name"
-            )
+            return qs.filter(year=year).select_related("employee__user", "department")
 
         # If neither provided -> choose latest week available in DB (preferred)
         latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
         if latest_year:
             latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(max_week=Max("week_number"))["max_week"]
             if latest_week:
-                return qs.filter(year=latest_year, week_number=latest_week).select_related("employee__user", "department").order_by(
-                    "-total_score",
-                    "employee__user__first_name",
-                    "employee__user__last_name"
-                )
+                return qs.filter(year=latest_year, week_number=latest_week).select_related("employee__user", "department")
 
         # Last fallback: return qs ordered by review_date
         return qs.select_related("employee__user", "department").order_by("-review_date")
@@ -345,11 +327,7 @@ class PerformanceSummaryView(APIView):
             qs = PerformanceEvaluation.objects.filter(
                 year=req_year,
                 week_number=req_week
-            ).select_related("employee__user", "department").order_by(
-                "-total_score",
-                "employee__user__first_name",
-                "employee__user__last_name"
-            )
+            ).select_related("employee__user", "department")
 
             search = request.query_params.get("search", "").strip()
             if search:
@@ -383,11 +361,8 @@ class PerformanceSummaryView(APIView):
             qs = PerformanceEvaluation.objects.filter(
                 year=latest_year,
                 week_number=latest_week
-            ).select_related("employee__user", "department").order_by(
-                "-total_score",
-                "employee__user__first_name",
-                "employee__user__last_name"
-            )
+            ).select_related("employee__user", "department")
+
 
             search = request.query_params.get("search", "").strip()
             if search:
@@ -401,6 +376,26 @@ class PerformanceSummaryView(APIView):
 
 
             evaluation_period = f"Week {latest_week}, {latest_year}"
+
+        # ========== APPLY SORTING (NEW) ==========
+        sort_by = request.query_params.get("sort_by")
+        order = request.query_params.get("order", "asc")
+
+        sortable_fields = {
+            "emp_id": "employee__user__emp_id",
+            "full_name": "employee__user__first_name",   # sorted by first name
+            "total_score": "total_score",
+            "rank": "rank",
+        }
+
+        if sort_by in sortable_fields:
+            field = sortable_fields[sort_by]
+            if order == "desc":
+                field = f"-{field}"
+
+            qs = qs.order_by(field)
+        else:
+            qs = qs.order_by("-total_score")
 
         # ------- ALWAYS INITIALIZE PAGINATOR -------
         paginator = PageNumberPagination()
