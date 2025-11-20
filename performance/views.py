@@ -676,3 +676,36 @@ class LatestEvaluationWeekAPIView(APIView):
 
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CheckDuplicatePerformanceAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        emp_id = request.query_params.get("emp_id")
+        week = request.query_params.get("week")
+        year = request.query_params.get("year")
+        evaluation_type = request.query_params.get("evaluation_type", "Manager")
+
+        if not emp_id or not week or not year:
+            return Response(
+                {"error": "emp_id, week and year are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            employee = Employee.objects.get(user__emp_id__iexact=emp_id)
+        except Employee.DoesNotExist:
+            return Response({"error": "Employee not found"}, status=404)
+
+        exists = PerformanceEvaluation.objects.filter(
+            employee=employee,
+            week_number=week,
+            year=year,
+            evaluation_type=evaluation_type
+        ).exists()
+
+        return Response({
+            "exists": exists,
+            "message": "Duplicate record exists" if exists else "No duplicate found"
+        })

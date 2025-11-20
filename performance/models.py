@@ -148,14 +148,20 @@ class PerformanceEvaluation(models.Model):
         ordering = ["-review_date", "-created_at"]
         verbose_name = "Performance Evaluation"
         verbose_name_plural = "Performance Evaluations"
+
         indexes = [
             models.Index(fields=["employee"]),
             models.Index(fields=["department"]),
             models.Index(fields=["week_number", "year"]),
             models.Index(fields=["evaluation_type"]),
-            models.Index(fields=["average_score"]),
         ]
-        constraints = []
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "week_number", "year", "evaluation_type"],
+                name="unique_employee_week_year_evaluation"
+            )
+        ]
 
     # -------------------------------------------------------
     # Validation
