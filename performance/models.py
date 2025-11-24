@@ -199,32 +199,6 @@ class PerformanceEvaluation(models.Model):
         return total
 
     # -------------------------------------------------------
-    # Rank Calculation (Manual trigger if needed)
-    # -------------------------------------------------------
-    def calculate_rank(self):
-        """
-        Compute rank within the same department/week and evaluation_type.
-        Sets self.rank for this instance and returns it.
-        """
-        qs = PerformanceEvaluation.objects.filter(
-            department=self.department,
-            week_number=self.week_number,
-            year=self.year,
-            evaluation_type=self.evaluation_type,
-        ).order_by("-average_score", "employee__user__first_name", "employee__user__emp_id")
-
-        # Build ordered list of pks and set ranks
-        ordered_pks = [obj.pk for obj in qs]
-        for index, pk in enumerate(ordered_pks, start=1):
-            if pk == self.pk:
-                self.rank = index
-                self.save(update_fields=["rank"])
-            else:
-                # ensure other records have correct rank value
-                PerformanceEvaluation.objects.filter(pk=pk).update(rank=index)
-        return self.rank
-
-    # -------------------------------------------------------
     # Auto-Ranking Helper (Used by Signals)
     # -------------------------------------------------------
     def auto_rank_trigger(self):

@@ -57,6 +57,7 @@ class SimpleEmployeeSerializer(serializers.ModelSerializer):
 # READ-ONLY SERIALIZER (List / Detail)
 # ===========================================================
 class PerformanceEvaluationSerializer(serializers.ModelSerializer):
+    week = serializers.IntegerField(source="week_number", read_only=True)
     department_name = serializers.SerializerMethodField()
     employee_name = serializers.SerializerMethodField() 
     evaluator_name = serializers.SerializerMethodField()
@@ -79,6 +80,9 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
             "evaluation_type",
             "review_date",
             "evaluation_period",
+            "week_number",
+            "week",
+            "year",
             "metrics",
             "total_score",
             "average_score",
@@ -241,6 +245,9 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
         # Include evaluator name if present
         if instance.evaluator:
             rep["evaluator_name"] = f"{instance.evaluator.first_name} {instance.evaluator.last_name}".strip()
+
+        rep["week"] = instance.week_number
+        rep["year"] = instance.year
 
         return rep
 

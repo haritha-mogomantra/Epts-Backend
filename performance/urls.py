@@ -12,6 +12,7 @@ from .views import (
     PerformanceDashboardView,
     LatestEvaluationWeekAPIView,
     CheckDuplicatePerformanceAPIView,
+    PerformanceByEmployeeWeekAPIView,
 )
 
 router = DefaultRouter()
@@ -36,5 +37,7 @@ urlpatterns = [
     path("evaluation-by-emp/<str:emp_id>/", EmployeePerformanceByIdView.as_view(), name="performance_by_emp"),
 
     path("latest-week/", LatestEvaluationWeekAPIView.as_view(), name="latest-week"),
-    path("check-duplicate/", CheckDuplicatePerformanceAPIView.as_view(), name="check-duplicate"),
+    path("check-duplicate/", CheckDuplicatePerformanceAPIView.as_view(), name="check-duplicate"),\
+    path('performance/by-employee-week/', PerformanceByEmployeeWeekAPIView.as_view()),
+
 ]

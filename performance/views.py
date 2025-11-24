@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Max, F, Avg, Window, Count, Q
-from django.db.models.functions import Rank
+from django.db.models.functions import Rank, DenseRank
 from django.db import IntegrityError
 from django.utils import timezone
 from .models import PerformanceEvaluation
@@ -147,7 +147,6 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
         try:
             instance = serializer.save()       # create + calculate scores in model.save()
             instance.refresh_from_db()         # critical: pull updated scores/evaluation_period
-            instance.auto_rank_trigger()       # update ranks
             instance.refresh_from_db()         # critical: pull updated rank
         except IntegrityError:
             return Response(
@@ -329,6 +328,35 @@ class PerformanceSummaryView(APIView):
                 week_number=req_week
             ).select_related("employee__user", "department")
 
+            qs = qs.annotate(
+                week_rank=Window(
+                    expression=DenseRank(),
+                    order_by=F("total_score").desc()
+                )
+            )
+
+            # ---------------- APPLY SORTING ----------------
+            sort_by = request.query_params.get("sort_by")
+            order = request.query_params.get("order", "asc")
+
+            order_prefix = "-" if order == "desc" else ""
+
+            SORT_MAP = {
+                "emp_id": "employee__user__emp_id",
+                "full_name": "employee__user__first_name",
+                "total_score": "total_score",
+                "rank": "week_rank",
+            }
+
+            db_field = SORT_MAP.get(sort_by)
+
+            if db_field:
+                qs = qs.order_by(f"{order_prefix}{db_field}")
+            else:
+                qs = qs.order_by("-total_score")
+
+
+            # Apply search AFTER rank calculation
             search = request.query_params.get("search", "").strip()
             if search:
                 qs = qs.filter(
@@ -337,7 +365,6 @@ class PerformanceSummaryView(APIView):
                     Q(employee__user__last_name__icontains=search) |
                     Q(department__name__icontains=search)
                 )
-
 
             monday = date.fromisocalendar(int(req_year), int(req_week), 1)
             start, end = get_week_range(monday)
@@ -346,24 +373,64 @@ class PerformanceSummaryView(APIView):
             )
 
         else:
-            # fallback to latest week
-            latest_year = PerformanceEvaluation.objects.aggregate(max_year=Max("year"))["max_year"]
-            if not latest_year:
-                return Response({"message": "No performance data yet."}, status=status.HTTP_200_OK)
+            today = date.today()
+            current_year, current_week, _ = today.isocalendar()
 
-            latest_week = PerformanceEvaluation.objects.filter(year=latest_year).aggregate(
-                max_week=Max("week_number")
-            )["max_week"]
+            # Get latest COMPLETED week (exclude current week)
+            latest_record = (
+                PerformanceEvaluation.objects
+                .exclude(year=current_year, week_number=current_week)
+                .order_by("-year", "-week_number")
+                .first()
+            )
 
-            if not latest_week:
-                return Response({"message": "No weekly data found."}, status=status.HTTP_200_OK)
+            # SAFETY FALLBACK: If only current week exists, use it instead of returning blank
+            if not latest_record:
+                latest_record = (
+                    PerformanceEvaluation.objects
+                    .order_by("-year", "-week_number")
+                    .first()
+                )
+
+            if not latest_record:
+                return Response({"message": "No performance data available."}, status=status.HTTP_200_OK)
+
+            latest_year = latest_record.year
+            latest_week = latest_record.week_number
 
             qs = PerformanceEvaluation.objects.filter(
                 year=latest_year,
                 week_number=latest_week
             ).select_related("employee__user", "department")
 
+            qs = qs.annotate(
+                week_rank=Window(
+                    expression=DenseRank(),
+                    order_by=F("total_score").desc()
+                )
+            )
 
+            # ---------------- APPLY SORTING ----------------
+            sort_by = request.query_params.get("sort_by")
+            order = request.query_params.get("order", "asc")
+
+            order_prefix = "-" if order == "desc" else ""
+
+            SORT_MAP = {
+                "emp_id": "employee__user__emp_id",
+                "full_name": "employee__user__first_name",
+                "total_score": "total_score",
+                "rank": "week_rank",
+            }
+
+            db_field = SORT_MAP.get(sort_by)
+
+            if db_field:
+                qs = qs.order_by(f"{order_prefix}{db_field}")
+            else:
+                qs = qs.order_by("-total_score")
+
+            # Apply search AFTER rank calculation
             search = request.query_params.get("search", "").strip()
             if search:
                 qs = qs.filter(
@@ -373,29 +440,8 @@ class PerformanceSummaryView(APIView):
                     Q(department__name__icontains=search)
                 )
 
-
-
             evaluation_period = f"Week {latest_week}, {latest_year}"
 
-        # ========== APPLY SORTING (NEW) ==========
-        sort_by = request.query_params.get("sort_by")
-        order = request.query_params.get("order", "asc")
-
-        sortable_fields = {
-            "emp_id": "employee__user__emp_id",
-            "full_name": "employee__user__first_name",   # sorted by first name
-            "total_score": "total_score",
-            "rank": "rank",
-        }
-
-        if sort_by in sortable_fields:
-            field = sortable_fields[sort_by]
-            if order == "desc":
-                field = f"-{field}"
-
-            qs = qs.order_by(field)
-        else:
-            qs = qs.order_by("-total_score")
 
         # ------- ALWAYS INITIALIZE PAGINATOR -------
         paginator = PageNumberPagination()
@@ -405,14 +451,14 @@ class PerformanceSummaryView(APIView):
         # ------- Build Response Records -------
         employee_list = [
             {
-                "id": e.id,
-                "evaluation_id": e.id,
+                "id": e.pk,
+                "evaluation_id": e.pk,
                 "emp_id": e.employee.user.emp_id,
                 "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
                 "department_name": e.department.name if e.department else None,
                 "total_score": e.total_score,
                 "average_score": e.average_score,
-                "rank": e.rank,
+                "rank": e.week_rank,
                 "evaluation_period": e.evaluation_period or "-",
             }
             for e in result_page
@@ -545,7 +591,14 @@ class PerformanceDashboardView(APIView):
 
     def get(self, request):
         try:
-            evaluations = PerformanceEvaluation.objects.select_related("employee__user", "department")
+            today = date.today()
+            current_year, current_week, _ = today.isocalendar()
+
+            evaluations = (
+                PerformanceEvaluation.objects
+                .exclude(year=current_year, week_number=current_week)
+                .select_related("employee__user", "department")
+            )
             if not evaluations.exists():
                 return Response({"message": "No performance data available."}, status=status.HTTP_200_OK)
 
@@ -622,60 +675,34 @@ class PerformanceDashboardView(APIView):
 # ===========================================================
 # GET LATEST WEEK + YEAR (For frontend auto-select)
 # ===========================================================
+
 class LatestEvaluationWeekAPIView(APIView):
-    """
-    Returns the latest evaluation week available in PerformanceEvaluation.
-    Example:
-    {
-        "week": 46,
-        "year": 2025,
-        "evaluation_label": "Week 46 (10 Nov - 16 Nov 2025)"
-    }
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
-            latest_year = PerformanceEvaluation.objects.aggregate(
-                max_year=Max("year")
-            )["max_year"]
+            today = date.today()
+            current_year, current_week, _ = today.isocalendar()
 
-            if not latest_year:
-                return Response(
-                    {"week": None, "year": None, "evaluation_label": None},
-                    status=status.HTTP_200_OK,
-                )
-
-            latest_week = PerformanceEvaluation.objects.filter(
-                year=latest_year
-            ).aggregate(
-                max_week=Max("week_number")
-            )["max_week"]
-
-            if not latest_week:
-                return Response(
-                    {"week": None, "year": None, "evaluation_label": None},
-                    status=status.HTTP_200_OK,
-                )
-
-            # Build label
-            record = PerformanceEvaluation.objects.filter(
-                year=latest_year, week_number=latest_week
-            ).first()
-
-            label = record.evaluation_period if record else None
-
-            return Response(
-                {
-                    "week": latest_week,
-                    "year": latest_year,
-                    "evaluation_label": label,
-                },
-                status=status.HTTP_200_OK,
+            # ✅ Get latest week EXCLUDING current week
+            latest_record = (
+                PerformanceEvaluation.objects
+                .exclude(year=current_year, week_number=current_week)
+                .order_by("-year", "-week_number")
+                .first()
             )
 
+            if not latest_record:
+                return Response({"week": None, "year": None}, status=200)
+
+            return Response({
+                "week": latest_record.week_number,
+                "year": latest_record.year,
+                "evaluation_label": latest_record.evaluation_period
+            }, status=200)
+
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=500)
 
 
 class CheckDuplicatePerformanceAPIView(APIView):
@@ -709,3 +736,32 @@ class CheckDuplicatePerformanceAPIView(APIView):
             "exists": exists,
             "message": "Duplicate record exists" if exists else "No duplicate found"
         })
+
+
+class PerformanceByEmployeeWeekAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        emp_id = request.query_params.get("emp_id")
+        week = request.query_params.get("week")
+        year = request.query_params.get("year")
+
+        if not emp_id or not week or not year:
+            return Response({"error": "emp_id, week and year are required"}, status=400)
+
+        try:
+            employee = Employee.objects.get(user__emp_id=emp_id)
+        except Employee.DoesNotExist:
+            return Response({"error": "Employee not found"}, status=404)
+
+        try:
+            evaluation = PerformanceEvaluation.objects.get(
+                employee=employee,
+                week_number=int(week),
+                year=int(year)
+            )
+        except PerformanceEvaluation.DoesNotExist:
+            return Response({"error": "Evaluation not found"}, status=404)
+
+        serializer = PerformanceEvaluationSerializer(evaluation)
+        return Response(serializer.data, status=200)
