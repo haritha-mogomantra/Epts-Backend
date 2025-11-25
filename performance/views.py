@@ -269,7 +269,15 @@ class EmployeePerformanceByIdView(APIView):
 
         if not qs.exists():
             return Response(
-                {"message": f"No performance data found for employee {emp_id}."},
+                {
+                    "employee": {
+                        "emp_id": emp.user.emp_id,
+                        "employee_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                        "department_name": getattr(emp.department, "name", "-"),
+                    },
+                    "record_count": 0,
+                    "evaluations": []
+                },
                 status=status.HTTP_200_OK,
             )
 

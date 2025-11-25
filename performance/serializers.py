@@ -566,7 +566,6 @@ class PerformanceDashboardSerializer(serializers.ModelSerializer):
     manager_name = serializers.SerializerMethodField()
     department_name = serializers.ReadOnlyField(source="department.name")
     score_display = serializers.SerializerMethodField()
-    score_category = serializers.SerializerMethodField()
     
 
     class Meta:
@@ -575,7 +574,7 @@ class PerformanceDashboardSerializer(serializers.ModelSerializer):
             "id", "emp_id", "employee_name", "manager_name",
             "department_name", "review_date", "evaluation_period",
             "evaluation_type", "total_score", "average_score",
-            "rank", "score_display", "score_category", "remarks",
+            "rank", "score_display", "remarks",
         ]
 
     def get_employee_name(self, obj):
