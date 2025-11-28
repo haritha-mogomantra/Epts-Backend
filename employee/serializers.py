@@ -15,6 +15,21 @@ User = get_user_model()
 
 
 # ===========================================================
+# EMP ID GENERATOR (SHARED & SAFE)
+# ===========================================================
+def generate_emp_id():
+    last_user = User.objects.filter(emp_id__startswith="EMP").order_by("-emp_id").first()
+
+    if last_user and last_user.emp_id:
+        last_number = int(last_user.emp_id[3:])
+        new_number = last_number + 1
+    else:
+        new_number = 1
+
+    return f"EMP{str(new_number).zfill(4)}"
+
+
+# ===========================================================
 # DEPARTMENT SERIALIZER
 # ===========================================================
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -369,7 +384,10 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
             if not manager or not getattr(manager.user, "role", None) in ["Manager", "Admin"]:
                 raise serializers.ValidationError({"manager": "Assigned manager must have role 'Manager' or 'Admin'."})
 
+        new_emp_id = generate_emp_id()
+
         user = User.objects.create_user(
+            emp_id=new_emp_id,
             email=email,
             first_name=first_name,
             last_name=last_name,
@@ -816,7 +834,10 @@ class EmployeeCSVUploadSerializer(serializers.Serializer):
                             continue
 
                     # 🔟 Create User & Employee
+                    new_emp_id = generate_emp_id()
+
                     user = User.objects.create_user(
+                        emp_id=new_emp_id,
                         email=email,
                         first_name=first_name,
                         last_name=last_name,

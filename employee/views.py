@@ -113,7 +113,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members").filter(is_deleted=False)
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = DefaultPagination
-    lookup_field = "user__emp_id"
+    lookup_field = "emp_id"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["status"]
     search_fields = [
@@ -133,7 +133,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         request = self.request
         user = request.user
-        qs = Employee.objects.select_related("user", "department", "manager")
+        qs = Employee.objects.select_related("user", "department", "manager").filter(is_deleted=False)
 
         role = getattr(user, "role", "")
         if role == "Manager":
@@ -181,23 +181,34 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         )
 
         return qs
+
+
+    def list(self, request, *args, **kwargs):
+        """
+        Ensures pagination always respects search + filters + ordering together.
+        This is enterprise-standard DRF behavior enforcement.
+        """
+
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
  
 
     def get_object(self):
-        emp_id = self.kwargs.get("user__emp_id")
+        emp_id = self.kwargs.get("emp_id")
         try:
-            employee = (
-                Employee.objects
-                .select_related("user", "department", "manager")
-                .get(user__emp_id__iexact=emp_id)
+            return Employee.objects.select_related("user", "department", "manager").get(
+                user__emp_id__iexact=emp_id,
+                is_deleted=False
             )
-            if employee.is_deleted:
-                raise ValidationError("This employee has been deleted. No further actions allowed.")
-            return employee
         except Employee.DoesNotExist:
             raise NotFound(detail=f"Employee with emp_id '{emp_id}' not found.")
-        except ValidationError as e:
-            raise NotFound(detail=str(e))
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -235,10 +246,10 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        emp_id = kwargs.get("user__emp_id")
+        emp_id = kwargs.get("emp_id")
 
         try:
-            # ✅ Fetch even if model has custom validation
+            # Fetch even if model has custom validation
             employee = Employee.objects.select_related("user").get(user__emp_id=emp_id, is_deleted=False)
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -251,16 +262,25 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["GET"], url_path="managers")
     def list_managers(self, request):
-        managers = Employee.objects.select_related("user").filter(
+        dept_code = request.query_params.get("department_code")
+
+        managers = Employee.objects.select_related("user", "department").filter(
             Q(user__role__in=["Manager", "Admin"]),
             is_deleted=False,
             status="Active"
-        ).order_by("user__first_name")
+        )
+
+        #FILTER BY DEPARTMENT WHEN PROVIDED
+        if dept_code:
+            managers = managers.filter(department__code=dept_code)
+
+        managers = managers.order_by("user__first_name")
 
         return Response([
             {
                 "emp_id": emp.emp_id,
-                "full_name": f"{emp.user.first_name} {emp.user.last_name}".strip()
+                "full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                "department": emp.department.code
             }
             for emp in managers
         ], status=status.HTTP_200_OK)

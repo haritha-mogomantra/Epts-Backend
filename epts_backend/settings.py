@@ -91,7 +91,7 @@ WSGI_APPLICATION = "epts_backend.wsgi.application"
 import pymysql
 pymysql.install_as_MySQLdb()
 
-DATABASES = {
+'''DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'epts_project_db',
@@ -100,7 +100,19 @@ DATABASES = {
         'HOST': '100.93.35.95',
         'PORT': '3306',
     }
+}'''
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'epts_project_db',
+        'USER': 'mogo_user',
+        'PASSWORD': 'Mogo@12345',
+        'HOST': '100.103.210.2',
+        'PORT': '3306',
+    }
 }
+
 
 # -------------------------------------------------------------------
 # CUSTOM USER MODEL

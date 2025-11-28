@@ -367,6 +367,8 @@ class RoleListView(APIView):
 # ===========================================================
 class UserPagination(PageNumberPagination):
     page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 class UserListView(generics.ListAPIView):
@@ -681,7 +683,7 @@ def get_employee_by_id(request, emp_id):
     """
     try:
         employee = Employee.objects.select_related("user", "department", "manager").get(
-            emp_id__iexact=emp_id
+            user__emp_id__iexact=emp_id
         )
 
         user = employee.user
@@ -695,7 +697,10 @@ def get_employee_by_id(request, emp_id):
             "gender": employee.gender,
             "contact_number": employee.contact_number,
             "dob": employee.dob,
-            "profile_picture_url": employee.profile_picture_url,
+            "profile_picture_url": (
+                request.build_absolute_uri(employee.profile_picture.url)
+                if employee.profile_picture else None
+            ),
 
             # PROFESSIONAL DETAILS
             "role": employee.role,

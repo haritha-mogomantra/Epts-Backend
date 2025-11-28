@@ -4,6 +4,7 @@
 
 from django.urls import path
 from .views import (
+    LatestWeekView,
     WeeklyReportView,
     MonthlyReportView,
     DepartmentReportView,
@@ -14,6 +15,7 @@ from .views import (
     CachedReportListView,
     CachedReportArchiveView,
     CachedReportRestoreView,
+    
 )
 
 # Namespace
@@ -62,4 +64,6 @@ urlpatterns = [
     path("cache/", CachedReportListView.as_view(), name="cached_reports_dashboard"),
     path("cache/<int:pk>/archive/", CachedReportArchiveView.as_view(), name="cached_report_archive"),
     path("cache/<int:pk>/restore/", CachedReportRestoreView.as_view(), name="cached_report_restore"),
+
+    path("latest-week/", LatestWeekView.as_view(), name="latest_week"),
 ]

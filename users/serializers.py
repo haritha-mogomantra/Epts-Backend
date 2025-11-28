@@ -15,10 +15,31 @@ import string
 import logging
 import re
 from datetime import datetime, date
-from employee.models import Department, Employee 
+from employee.models import Department, Employee
+from django.db.models import Max
 
 User = get_user_model()
-logger = logging.getLogger("users")
+
+
+# ===========================================================
+# EMP ID GENERATOR (SAFE + FUTURE PROOF)
+# ===========================================================
+def generate_emp_id():
+    with transaction.atomic():
+        last_emp = (
+            User.objects
+            .select_for_update()
+            .filter(emp_id__startswith="EMP")
+            .aggregate(max_emp=Max("emp_id"))["max_emp"]
+        )
+
+        if last_emp:
+            last_number = int(last_emp.replace("EMP", ""))
+        else:
+            last_number = 0
+
+        return f"EMP{last_number + 1:04d}"
+
 
 
 # ===========================================================
@@ -323,9 +344,8 @@ class RegisterSerializer(serializers.ModelSerializer):
                 )
 
         # Generate Emp ID
-        last_user = User.objects.select_for_update().order_by("-id").first()
-        last_num = int(last_user.emp_id.replace("EMP", "")) if last_user and last_user.emp_id else 0
-        new_emp_id = f"EMP{last_num + 1:04d}"
+        new_emp_id = generate_emp_id()
+
 
         # Temporary Password
         first_name = validated_data.get("first_name", "User").capitalize()
@@ -356,7 +376,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         Employee.objects.create(**emp_kwargs)
 
         user.temp_password = temp_password
-        logger.info(f"User {user.emp_id} created successfully with temp password.")
         return user
 
     # ---------------- RESPONSE FORMAT ----------------
@@ -408,7 +427,6 @@ class ChangePasswordSerializer(serializers.Serializer):
         user.set_password(self.validated_data["new_password"])
         user.force_password_change = False
         user.save(update_fields=["password", "force_password_change"])
-        logger.info(f"Password changed successfully for {user.emp_id}")
         return {"message": "Password changed successfully!"}
 
 
@@ -534,8 +552,7 @@ class RegeneratePasswordSerializer(serializers.Serializer):
             )
             mail_sent = True
         except Exception as e:
-            # log and fallback to console output so dev can copy the password
-            logger.warning(f"Failed to send regenerated password email to {user.emp_id}: {e}")
+            pass
             # Print to console when email backend not set / for local dev
             try:
                 print(f"[EPTS] Regenerated password for {user.emp_id}: {new_password}")
@@ -543,7 +560,6 @@ class RegeneratePasswordSerializer(serializers.Serializer):
                 # if printing fails, still continue
                 pass
 
-        logger.info(f"Temporary password regenerated for user {user.emp_id} by Admin.")
 
         return {
             "emp_id": user.emp_id,

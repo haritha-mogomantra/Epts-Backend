@@ -39,9 +39,35 @@ from .serializers import (
     DepartmentReportSerializer,
     CachedReportSerializer,
 )
-
+from datetime import date
 from reports.utils.pdf_generator import generate_employee_performance_pdf
 from notifications.views import create_report_notification 
+
+def get_latest_completed_week():
+    today = date.today()
+    year, week, _ = today.isocalendar()
+    week -= 1
+
+    if week == 0:
+        year -= 1
+        week = date(year, 12, 31).isocalendar()[1]
+
+    return year, week
+
+
+# ===========================================================
+# Latest Week API (Frontend Week Picker Authority)
+# ===========================================================
+class LatestWeekView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        year, week = get_latest_completed_week()
+        return Response({
+            "year": year,
+            "week": week
+        }, status=status.HTTP_200_OK)
+
 
 
 # ===========================================================
@@ -134,8 +160,17 @@ class WeeklyReportView(APIView):
 
     def get(self, request):
         try:
-            week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
-            year = int(request.query_params.get("year", timezone.now().year))
+            latest_year, latest_week = get_latest_completed_week()
+
+            week = int(request.query_params.get("week", latest_week))
+            year = int(request.query_params.get("year", latest_year))
+
+            if year > latest_year or (year == latest_year and week > latest_week):
+                return Response(
+                    {"message": "Future week selection is not allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             save_cache = request.query_params.get("save_cache", "false").lower() == "true"
 
             # Fetch weekly performance in one query
@@ -364,8 +399,16 @@ class DepartmentReportView(APIView):
             request.query_params.get("department") 
             or request.query_params.get("department_name")
         )
-        week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
-        year = int(request.query_params.get("year", timezone.now().year))
+        latest_year, latest_week = get_latest_completed_week()
+
+        week = int(request.query_params.get("week", latest_week))
+        year = int(request.query_params.get("year", latest_year))
+
+        if year > latest_year or (year == latest_year and week > latest_week):
+                return Response(
+                    {"message": "Future week selection is not allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         if not department_name:
             return Response({"error": "Please provide department_name."}, status=status.HTTP_400_BAD_REQUEST)
@@ -458,8 +501,16 @@ class ManagerReportView(APIView):
             request.query_params.get("manager")
             or request.query_params.get("manager_id")
         )
-        week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
-        year = int(request.query_params.get("year", timezone.now().year))
+        latest_year, latest_week = get_latest_completed_week()
+
+        week = int(request.query_params.get("week", latest_week))
+        year = int(request.query_params.get("year", latest_year))
+
+        if year > latest_year or (year == latest_year and week > latest_week):
+                return Response(
+                    {"message": "Future week selection is not allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         if not manager_id:
             return Response({"error": "Manager ID is required (manager or manager_id)."}, status=status.HTTP_400_BAD_REQUEST)
@@ -556,8 +607,16 @@ class ExportWeeklyExcelView(APIView):
 
     def get(self, request):
         try:
-            week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
-            year = int(request.query_params.get("year", timezone.now().year))
+            latest_year, latest_week = get_latest_completed_week()
+
+            week = int(request.query_params.get("week", latest_week))
+            year = int(request.query_params.get("year", latest_year))
+
+            if year > latest_year or (year == latest_year and week > latest_week):
+                return Response(
+                    {"message": "Future week selection is not allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             qs = (
                 PerformanceEvaluation.objects.filter(week_number=week, year=year)
@@ -804,8 +863,16 @@ class PrintPerformanceReportView(APIView):
 
     def get(self, request, emp_id):
         try:
-            week = int(request.query_params.get("week", timezone.now().isocalendar()[1]))
-            year = int(request.query_params.get("year", timezone.now().year))
+            latest_year, latest_week = get_latest_completed_week()
+
+            week = int(request.query_params.get("week", latest_week))
+            year = int(request.query_params.get("year", latest_year))
+
+            if year > latest_year or (year == latest_year and week > latest_week):
+                return Response(
+                    {"message": "Future week selection is not allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             # Fetch employee
             try:
@@ -860,7 +927,7 @@ class CachedReportListView(ListAPIView):
     serializer_class = CachedReportSerializer
 
     def get_queryset(self):
-        queryset = CachedReport.objects.all().order_by("-created_at")
+        queryset = CachedReport.objects.all().order_by("-generated_at")
         report_type = self.request.query_params.get("report_type")
         if report_type:
             queryset = queryset.filter(report_type__iexact=report_type)

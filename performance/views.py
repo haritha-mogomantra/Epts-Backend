@@ -204,7 +204,7 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
         data["rank"] = instance.rank
 
         # Ensure department name appears
-        data["department_name"] = getattr(instance.department, "name", None)
+        data["department_name"] = getattr(instance.employee.department, "name", None)
 
         # Ensure employee name appears
         if instance.employee and instance.employee.user:
@@ -463,7 +463,7 @@ class PerformanceSummaryView(APIView):
                 "evaluation_id": e.pk,
                 "emp_id": e.employee.user.emp_id,
                 "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
-                "department_name": e.department.name if e.department else None,
+                "department_name": e.employee.department.name if e.employee.department else None,  # ✅ FIX
                 "total_score": e.total_score,
                 "average_score": e.average_score,
                 "rank": e.week_rank,
@@ -683,18 +683,23 @@ class PerformanceDashboardView(APIView):
 # ===========================================================
 # GET LATEST WEEK + YEAR (For frontend auto-select)
 # ===========================================================
-
 class LatestEvaluationWeekAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        emp_id = request.query_params.get("emp_id")
+
+        if not emp_id:
+            return Response({"error": "emp_id required"}, status=400)
+
         try:
             today = date.today()
             current_year, current_week, _ = today.isocalendar()
 
-            # ✅ Get latest week EXCLUDING current week
+            # ✅ Always pick the LATEST COMPLETED week, not current or older cached
             latest_record = (
                 PerformanceEvaluation.objects
+                .filter(employee__user__emp_id=emp_id)
                 .exclude(year=current_year, week_number=current_week)
                 .order_by("-year", "-week_number")
                 .first()
@@ -706,7 +711,6 @@ class LatestEvaluationWeekAPIView(APIView):
             return Response({
                 "week": latest_record.week_number,
                 "year": latest_record.year,
-                "evaluation_label": latest_record.evaluation_period
             }, status=200)
 
         except Exception as e:
@@ -729,6 +733,15 @@ class CheckDuplicatePerformanceAPIView(APIView):
             )
 
         try:
+            week = int(week)
+            year = int(year)
+        except ValueError:
+            return Response(
+                {"error": "Invalid week/year format"},
+                status=400
+            )
+
+        try:
             employee = Employee.objects.get(user__emp_id__iexact=emp_id)
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=404)
@@ -744,7 +757,7 @@ class CheckDuplicatePerformanceAPIView(APIView):
             "exists": exists,
             "message": "Duplicate record exists" if exists else "No duplicate found"
         })
-
+    
 
 class PerformanceByEmployeeWeekAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -754,22 +767,25 @@ class PerformanceByEmployeeWeekAPIView(APIView):
         week = request.query_params.get("week")
         year = request.query_params.get("year")
 
-        if not emp_id or not week or not year:
-            return Response({"error": "emp_id, week and year are required"}, status=400)
-
         try:
             employee = Employee.objects.get(user__emp_id=emp_id)
         except Employee.DoesNotExist:
             return Response({"error": "Employee not found"}, status=404)
 
-        try:
-            evaluation = PerformanceEvaluation.objects.get(
+        # ✅ If week/year NOT provided, get latest for that employee
+        if not week or not year:
+            evaluation = PerformanceEvaluation.objects.filter(
+                employee=employee
+            ).order_by("-year", "-week_number").first()
+        else:
+            evaluation = PerformanceEvaluation.objects.filter(
                 employee=employee,
                 week_number=int(week),
                 year=int(year)
-            )
-        except PerformanceEvaluation.DoesNotExist:
-            return Response({"error": "Evaluation not found"}, status=404)
+            ).first()
+
+        if not evaluation:
+            return Response({"metrics": []}, status=200)
 
         serializer = PerformanceEvaluationSerializer(evaluation)
         return Response(serializer.data, status=200)
