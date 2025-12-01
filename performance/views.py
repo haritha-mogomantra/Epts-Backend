@@ -91,17 +91,9 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
             return qs.filter(week_number=week, year=year).select_related("employee__user", "department")
 
 
-        # If only week provided -> try to find that week in the latest year that contains it
+        # If week provided but year NOT provided → return empty (DO NOT auto-guess)
         if week and not year:
-            # prefer most recent year that has that week
-            candidate = (
-                PerformanceEvaluation.objects.filter(week_number=week)
-                .values_list("year", flat=True)
-                .order_by("-year")
-                .first()
-            )
-            if candidate:
-                return qs.filter(week_number=week, year=candidate).select_related("employee__user", "department")
+            return qs.filter(week_number=week, year=timezone.now().year).select_related("employee__user", "department")
             
             # fallback: filter by week number across years (rare)
             return qs.filter(week_number=week).select_related("employee__user", "department")
@@ -331,40 +323,25 @@ class PerformanceSummaryView(APIView):
                 return Response({"error": "Invalid year"}, status=400)
 
         if req_week and req_year:
-            qs = PerformanceEvaluation.objects.filter(
+            # Get base dataset for the week (no search yet)
+            base_qs = PerformanceEvaluation.objects.filter(
                 year=req_year,
                 week_number=req_week
             ).select_related("employee__user", "department")
 
-            qs = qs.annotate(
-                week_rank=Window(
+            #  Compute TRUE RANK on full dataset
+            ranked = base_qs.annotate(
+                full_rank=Window(
                     expression=DenseRank(),
                     order_by=F("total_score").desc()
                 )
-            )
+            ).values("id", "full_rank")
 
-            # ---------------- APPLY SORTING ----------------
-            sort_by = request.query_params.get("sort_by")
-            order = request.query_params.get("order", "asc")
+            # Create rank map { evaluation_id : rank }
+            rank_map = {row["id"]: row["full_rank"] for row in ranked}
 
-            order_prefix = "-" if order == "desc" else ""
-
-            SORT_MAP = {
-                "emp_id": "employee__user__emp_id",
-                "full_name": "employee__user__first_name",
-                "total_score": "total_score",
-                "rank": "week_rank",
-            }
-
-            db_field = SORT_MAP.get(sort_by)
-
-            if db_field:
-                qs = qs.order_by(f"{order_prefix}{db_field}")
-            else:
-                qs = qs.order_by("-total_score")
-
-
-            # Apply search AFTER rank calculation
+            # Apply search (DO NOT recalculate rank)
+            qs = base_qs
             search = request.query_params.get("search", "").strip()
             if search:
                 qs = qs.filter(
@@ -374,8 +351,30 @@ class PerformanceSummaryView(APIView):
                     Q(department__name__icontains=search)
                 )
 
-            monday = date.fromisocalendar(int(req_year), int(req_week), 1)
-            start, end = get_week_range(monday)
+            # Apply sorting using TRUE rank
+            sort_by = request.query_params.get("sort_by")
+            order = request.query_params.get("order", "asc")
+            order_prefix = "-" if order == "desc" else ""
+
+            SORT_MAP = {
+                "emp_id": "employee__user__emp_id",
+                "full_name": "employee__user__first_name",
+                "total_score": "total_score",
+                "rank": "full_rank",
+            }
+
+            db_field = SORT_MAP.get(sort_by)
+            if db_field:
+                qs = qs.order_by(f"{order_prefix}{db_field}")
+            else:
+                qs = qs.order_by("-total_score")
+
+            # Inject TRUE rank
+            for obj in qs:
+                obj.week_rank = rank_map.get(obj.id)
+
+
+            start, end = get_week_range(int(req_year), int(req_week))
             evaluation_period = (
                 f"Week {req_week} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
             )
@@ -384,7 +383,6 @@ class PerformanceSummaryView(APIView):
             today = date.today()
             current_year, current_week, _ = today.isocalendar()
 
-            # Get latest COMPLETED week (exclude current week)
             latest_record = (
                 PerformanceEvaluation.objects
                 .exclude(year=current_year, week_number=current_week)
@@ -392,7 +390,6 @@ class PerformanceSummaryView(APIView):
                 .first()
             )
 
-            # SAFETY FALLBACK: If only current week exists, use it instead of returning blank
             if not latest_record:
                 latest_record = (
                     PerformanceEvaluation.objects
@@ -406,39 +403,25 @@ class PerformanceSummaryView(APIView):
             latest_year = latest_record.year
             latest_week = latest_record.week_number
 
-            qs = PerformanceEvaluation.objects.filter(
+            # 1️⃣ Base queryset (NO search yet)
+            base_qs = PerformanceEvaluation.objects.filter(
                 year=latest_year,
                 week_number=latest_week
             ).select_related("employee__user", "department")
 
-            qs = qs.annotate(
-                week_rank=Window(
+            # 2️⃣ Compute TRUE RANK on full dataset
+            ranked = base_qs.annotate(
+                full_rank=Window(
                     expression=DenseRank(),
                     order_by=F("total_score").desc()
                 )
-            )
+            ).values("id", "full_rank")
 
-            # ---------------- APPLY SORTING ----------------
-            sort_by = request.query_params.get("sort_by")
-            order = request.query_params.get("order", "asc")
+            # 3️⃣ Rank map
+            rank_map = {row["id"]: row["full_rank"] for row in ranked}
 
-            order_prefix = "-" if order == "desc" else ""
-
-            SORT_MAP = {
-                "emp_id": "employee__user__emp_id",
-                "full_name": "employee__user__first_name",
-                "total_score": "total_score",
-                "rank": "week_rank",
-            }
-
-            db_field = SORT_MAP.get(sort_by)
-
-            if db_field:
-                qs = qs.order_by(f"{order_prefix}{db_field}")
-            else:
-                qs = qs.order_by("-total_score")
-
-            # Apply search AFTER rank calculation
+            # 4️⃣ Apply search (DO NOT recalc rank)
+            qs = base_qs
             search = request.query_params.get("search", "").strip()
             if search:
                 qs = qs.filter(
@@ -448,6 +431,28 @@ class PerformanceSummaryView(APIView):
                     Q(department__name__icontains=search)
                 )
 
+            # 5️⃣ Sorting using TRUE rank
+            sort_by = request.query_params.get("sort_by")
+            order = request.query_params.get("order", "asc")
+            order_prefix = "-" if order == "desc" else ""
+
+            SORT_MAP = {
+                "emp_id": "employee__user__emp_id",
+                "full_name": "employee__user__first_name",
+                "total_score": "total_score",
+                "rank": "full_rank",
+            }
+
+            db_field = SORT_MAP.get(sort_by)
+            if db_field:
+                qs = qs.order_by(f"{order_prefix}{db_field}")
+            else:
+                qs = qs.order_by("-total_score")
+
+            # 6️⃣ Inject true rank into each object
+            for obj in qs:
+                obj.week_rank = rank_map.get(obj.id)
+
             evaluation_period = f"Week {latest_week}, {latest_year}"
 
 
@@ -456,21 +461,45 @@ class PerformanceSummaryView(APIView):
         paginator.page_size = int(request.query_params.get("page_size", 10))
         result_page = paginator.paginate_queryset(qs, request)
 
-        # ------- Build Response Records -------
-        employee_list = [
-            {
-                "id": e.pk,
-                "evaluation_id": e.pk,
-                "emp_id": e.employee.user.emp_id,
-                "full_name": f"{e.employee.user.first_name} {e.employee.user.last_name}".strip(),
-                "department_name": e.employee.department.name if e.employee.department else None,  # ✅ FIX
-                "total_score": e.total_score,
-                "average_score": e.average_score,
-                "rank": e.week_rank,
-                "evaluation_period": e.evaluation_period or "-",
-            }
-            for e in result_page
-        ]
+        serializer = PerformanceEvaluationSerializer(result_page, many=True)
+        employee_list = serializer.data
+
+        # 🔥 Ensure dynamic fields for all weeks (fix missing data for older weeks)
+        for idx, obj in enumerate(result_page):
+            row = employee_list[idx]
+
+            # Employee Emp ID
+            if obj.employee and obj.employee.user:
+                row["employee_emp_id"] = obj.employee.user.emp_id
+                row["employee_name"] = f"{obj.employee.user.first_name} {obj.employee.user.last_name}".strip()
+            else:
+                row["employee_emp_id"] = "-"
+                row["employee_name"] = "-"
+
+            # Department Name
+            row["department_name"] = (
+                obj.employee.department.name
+                if obj.employee and obj.employee.department
+                else "-"
+            )
+
+            # Manager Name
+            if obj.employee and obj.employee.manager and obj.employee.manager.user:
+                mgr = obj.employee.manager.user
+                row["manager_name"] = f"{mgr.first_name} {mgr.last_name}".strip()
+            else:
+                row["manager_name"] = "-"
+
+            # Evaluation Period (Week label)
+            start, end = get_week_range(obj.year, obj.week_number)
+
+            row["display_period"] = (
+                f"Week {obj.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
+            )
+
+        # Inject true rank (week_rank)
+        for obj, rank in zip(employee_list, result_page):
+            obj["rank"] = rank.week_rank
 
         # ------- Return Paginated Response -------
         return paginator.get_paginated_response({

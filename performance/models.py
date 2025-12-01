@@ -22,10 +22,10 @@ def current_year():
     return timezone.now().year
 
 
-def get_week_range(date):
-    """Return start and end dates for the week of given date (Monday..Sunday)."""
-    start = date - timedelta(days=date.weekday())  # Monday
-    end = start + timedelta(days=6)  # Sunday
+def get_week_range(year, week):
+    """Return Monday–Sunday date range for a given ISO year + week."""
+    start = date.fromisocalendar(year, week, 1)  # Monday
+    end = start + timedelta(days=6)              # Sunday
     return start, end
 
 
@@ -280,10 +280,8 @@ class PerformanceEvaluation(models.Model):
     def save(self, *args, **kwargs):
         """Auto-calculate total, average, and prevent duplicate evaluations on create."""
 
-
         # Do NOT override week/year — they must come from frontend
         if not self.week_number or not self.year:
-            # fallback only if missing
             iso = self.review_date.isocalendar()
             self.week_number = iso[1]
             self.year = iso[0]
@@ -295,9 +293,8 @@ class PerformanceEvaluation(models.Model):
         # Calculate scores
         self.calculate_total_score()
 
-        # Always regenerate evaluation period based on selected week & year
-        d = date.fromisocalendar(self.year, self.week_number, 1)  # Monday of selected week
-        start, end = get_week_range(d)
+        # Generate evaluation period based on selected week & year
+        start, end = get_week_range(self.year, self.week_number)
 
         self.evaluation_period = (
             f"Week {self.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"

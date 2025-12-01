@@ -57,6 +57,7 @@ class SimpleEmployeeSerializer(serializers.ModelSerializer):
 # READ-ONLY SERIALIZER (List / Detail)
 # ===========================================================
 class PerformanceEvaluationSerializer(serializers.ModelSerializer):
+    employee_summary = serializers.SerializerMethodField()
     week = serializers.IntegerField(source="week_number", read_only=True)
     department_name = serializers.SerializerMethodField()
     employee_name = serializers.SerializerMethodField() 
@@ -69,11 +70,33 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
 
     metrics = serializers.SerializerMethodField()
 
+    week_start = serializers.SerializerMethodField()
+    week_end = serializers.SerializerMethodField()
+    week_label = serializers.SerializerMethodField()
+    display_period = serializers.SerializerMethodField()
+
+
+    def get_employee_summary(self, obj):
+        emp = obj.employee
+        u = emp.user
+
+        return {
+            "emp_id": u.emp_id,
+            "full_name": f"{u.first_name} {u.last_name}".strip(),
+            "department_name": emp.department.name if emp.department else None,
+            "manager_name": (
+                f"{emp.manager.user.first_name} {emp.manager.user.last_name}".strip()
+                if emp.manager and emp.manager.user else "-"
+            )
+        }
+
+
     class Meta:
         model = PerformanceEvaluation
         fields = [
             "id",
             "employee",
+            "employee_summary",
             "employee_emp_id",
             "evaluator",
             "department",
@@ -91,6 +114,10 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
             "department_name",
             "employee_name",
             "evaluator_name",
+            "week_start",
+            "week_end",
+            "week_label",
+            "display_period",
         ]
 
     # ---------- METRICS (Frontend expects simplified keys) ----------
@@ -156,6 +183,37 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
         if obj.evaluator:
             return f"{obj.evaluator.first_name} {obj.evaluator.last_name}".strip()
         return None
+    
+        # ---------- WEEK RANGE CALCULATIONS ----------
+    def get_week_start(self, obj):
+        from datetime import date
+        try:
+            return date.fromisocalendar(obj.year, obj.week_number, 1)
+        except:
+            return None
+
+    def get_week_end(self, obj):
+        from datetime import date, timedelta
+        try:
+            start = date.fromisocalendar(obj.year, obj.week_number, 1)
+            return start + timedelta(days=6)
+        except:
+            return None
+
+    def get_week_label(self, obj):
+        return f"Week {obj.week_number}"
+
+    def get_display_period(self, obj):
+        # Returns: "Week 47 (18 Nov - 24 Nov 2025)"
+        try:
+            start = self.get_week_start(obj)
+            end = self.get_week_end(obj)
+            if not start or not end:
+                return None
+            return f"Week {obj.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
+        except:
+            return None
+
 
 
     # ---------- CREATE ----------
@@ -223,34 +281,41 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-    # ---------- REPRESENTATION (Response to Frontend) ----------
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
-        # Ensure department name always appears
-        rep["department_name"] = (
-            getattr(instance.department, "name", None)
-            if hasattr(instance, "department") and instance.department
-            else None
+        emp = instance.employee
+        user = emp.user if emp else None
+
+        # ALWAYS fetch fresh dynamic employee details
+        rep["employee_emp_id"] = user.emp_id if user else None
+
+        rep["employee_name"] = (
+            f"{user.first_name} {user.last_name}".strip()
+            if user else None
         )
 
-        # Include employee name and emp_id for frontend display
-        if instance.employee and hasattr(instance.employee, "user"):
-            rep["employee_name"] = f"{instance.employee.user.first_name} {instance.employee.user.last_name}".strip()
-            rep["employee_emp_id"] = getattr(instance.employee, "emp_id", None)
+        rep["department_name"] = (
+            emp.department.name if emp and emp.department else None
+        )
+
+        # Manager fetch (fully dynamic)
+        if emp and emp.manager and emp.manager.user:
+            mgr = emp.manager.user
+            rep["manager_name"] = f"{mgr.first_name} {mgr.last_name}".strip()
         else:
-            rep["employee_name"] = getattr(instance.employee, "full_name", None)
-            rep["employee_emp_id"] = getattr(instance.employee, "emp_id", None)
+            rep["manager_name"] = "-"
 
-        # Include evaluator name if present
+        # Evaluator name
         if instance.evaluator:
-            rep["evaluator_name"] = f"{instance.evaluator.first_name} {instance.evaluator.last_name}".strip()
+            ev = instance.evaluator
+            rep["evaluator_name"] = f"{ev.first_name} {ev.last_name}".strip()
 
+        # Week / Year consistency
         rep["week"] = instance.week_number
         rep["year"] = instance.year
 
         return rep
-
 
 # ===========================================================
 # CREATE / UPDATE SERIALIZER (Fixed for "employee": "EMPxxxx" input)

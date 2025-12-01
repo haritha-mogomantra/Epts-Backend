@@ -410,16 +410,22 @@ class DepartmentReportView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        if not department_name:
-            return Response({"error": "Please provide department_name."}, status=status.HTTP_400_BAD_REQUEST)
+        # FIX: allow ALL departments (empty or ALL_DEPT)
+        if department_name in [None, "", "ALL_DEPT"]:
+            department_name = None
 
         try:
-            employees = Employee.objects.filter(
-                Q(department__name__iexact=department_name) |
-                Q(department__code__iexact=department_name)
+            # If ALL departments → select every employee
+            if department_name is None:
+                employees = Employee.objects.all()
+            else:
+                employees = Employee.objects.filter(
+                    Q(department__name__iexact=department_name) |
+                    Q(department__code__iexact=department_name)
                 )
+
             if not employees.exists():
-                return Response({"message": f"No employees found in department {department_name}."}, status=status.HTTP_200_OK)
+                return Response({"message": "No employees found."}, status=status.HTTP_200_OK)
 
             qs = PerformanceEvaluation.objects.filter(employee__in=employees, week_number=week, year=year).select_related("employee__user", "department")
             if not qs.exists():
@@ -451,7 +457,8 @@ class DepartmentReportView(APIView):
                     manager_full_name = emp.manager.user.get_full_name()
 
                 records.append({
-                    "department_name": department_name,
+                    "department_name": emp.department.name if emp.department else "-",
+                    "department": emp.department.name if emp.department else "-",
                     "emp_id": emp.user.emp_id,
                     "employee_full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
                     "manager_full_name": manager_full_name,  
@@ -459,8 +466,8 @@ class DepartmentReportView(APIView):
                     "average_score": float(perf.average_score),
                     "score": float(perf.total_score),
                     "feedback_avg": float(feedback_map.get(emp.id, 0.0) or 0.0),
-                    "week_number": week,                    
-                    "year": year,                            
+                    "week_number": week,
+                    "year": year,
                     "rank": int(perf.computed_rank),
                     "remarks": perf.remarks or "",
                 })
@@ -512,26 +519,26 @@ class ManagerReportView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        if not manager_id:
-            return Response({"error": "Manager ID is required (manager or manager_id)."}, status=status.HTTP_400_BAD_REQUEST)
+        #  FIX: allow ALL managers (empty or ALL_MGR)
+        if manager_id in [None, "", "ALL_MGR"]:
+            manager_id = None
 
         try:
-            # === Flexible Manager Matching Logic ===
-            manager_qs = Employee.objects.filter(
-                Q(user__emp_id__iexact=manager_id) |
-                Q(user__email__iexact=manager_id) |
-                Q(user__first_name__icontains=manager_id) |
-                Q(user__last_name__icontains=manager_id) |
-                Q(user__first_name__icontains=manager_id.split(" ")[0])  # partial match
-            )
+            if manager_id is None:
+                employees = Employee.objects.all()
+            else:
+                manager_qs = Employee.objects.filter(
+                    Q(user__emp_id__iexact=manager_id) |
+                    Q(user__email__iexact=manager_id) |
+                    Q(user__first_name__icontains=manager_id) |
+                    Q(user__last_name__icontains=manager_id)
+                )
 
-            manager_obj = manager_qs.first()
+                manager_obj = manager_qs.first()
+                if not manager_obj:
+                    return Response({"error": "Manager not found."}, status=status.HTTP_404_NOT_FOUND)
 
-            if not manager_obj:
-                return Response({"error": "Manager not found."}, status=status.HTTP_404_NOT_FOUND)
-
-            # Employees under this manager
-            employees = Employee.objects.filter(manager=manager_obj)
+                employees = Employee.objects.filter(manager=manager_obj)
 
 
             if not employees.exists():
