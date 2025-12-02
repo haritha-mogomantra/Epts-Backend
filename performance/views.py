@@ -468,19 +468,21 @@ class PerformanceSummaryView(APIView):
         for idx, obj in enumerate(result_page):
             row = employee_list[idx]
 
-            # Employee Emp ID
+            # FIX: send both emp_id and employee_emp_id
             if obj.employee and obj.employee.user:
-                row["employee_emp_id"] = obj.employee.user.emp_id
+                row["emp_id"] = obj.employee.user.emp_id       # <-- REQUIRED FOR FRONTEND
+                row["employee_emp_id"] = obj.employee.user.emp_id   # old key
                 row["employee_name"] = f"{obj.employee.user.first_name} {obj.employee.user.last_name}".strip()
             else:
+                row["emp_id"] = "-"
                 row["employee_emp_id"] = "-"
                 row["employee_name"] = "-"
 
-            # Department Name
+
             row["department_name"] = (
                 obj.employee.department.name
                 if obj.employee and obj.employee.department
-                else "-"
+                else "Not Assigned"
             )
 
             # Manager Name
@@ -501,10 +503,9 @@ class PerformanceSummaryView(APIView):
         for obj, rank in zip(employee_list, result_page):
             obj["rank"] = rank.week_rank
 
-        # ------- Return Paginated Response -------
         return paginator.get_paginated_response({
             "evaluation_period": evaluation_period,
-            "records": employee_list,
+            "records": employee_list
         })
 
 # ===========================================================
@@ -718,8 +719,12 @@ class LatestEvaluationWeekAPIView(APIView):
     def get(self, request):
         emp_id = request.query_params.get("emp_id")
 
+        # GLOBAL LATEST WEEK (Dashboard use-case)
         if not emp_id:
-            return Response({"error": "emp_id required"}, status=400)
+            latest = PerformanceEvaluation.objects.order_by("-year", "-week_number").first()
+            if not latest:
+                return Response({"week": None, "year": None})
+            return Response({"week": latest.week_number, "year": latest.year})
 
         try:
             today = date.today()
