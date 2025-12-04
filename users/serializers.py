@@ -87,6 +87,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # If no match
         if not user:
             raise serializers.ValidationError({"detail": "Invalid username or password."})
+        
+        self.user = user 
 
         # Account lock validation
         if getattr(user, "account_locked", False):
@@ -117,6 +119,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             # Generate fresh JWT tokens
             refresh = self.get_token(user)
             access = refresh.access_token
+
+            self.user = user
 
             return {
                 "refresh": str(refresh),
@@ -203,6 +207,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "is_active": user.is_active,
             },
         }
+        self.user = user
         return data
 
     @classmethod

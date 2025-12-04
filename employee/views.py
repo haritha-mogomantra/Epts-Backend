@@ -302,7 +302,11 @@ class AdminProfileView(APIView):
 
         if not employee:
             # Try active department first, fallback to first available
-            dept = Department.objects.filter(is_active=True).first() or Department.objects.first()
+            dept = (
+                Department.objects.filter(name__iexact="Administration").first()
+                or Department.objects.filter(code__iexact="ADMIN").first()
+                or Department.objects.filter(is_active=True).first()
+            )
 
             employee = Employee.objects.create(
                 user=user,
@@ -331,7 +335,11 @@ class AdminProfileView(APIView):
         # AUTO-CREATE EMPLOYEE PROFILE IF MISSING
         employee = getattr(user, "employee_profile", None)
         if not employee:
-            dept = Department.objects.filter(is_active=True).first() or Department.objects.first()
+            dept = (
+                Department.objects.filter(name__iexact="Administration").first()
+                or Department.objects.filter(code__iexact="ADMIN").first()
+                or Department.objects.filter(is_active=True).first()
+            )
             employee = Employee.objects.create(
                 user=user,
                 role="Admin",

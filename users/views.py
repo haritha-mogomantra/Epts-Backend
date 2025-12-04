@@ -98,16 +98,17 @@ class ObtainTokenPairView(TokenObtainPairView):
             )
 
         data = serializer.validated_data
-        user_data = data.get("user", {})
 
-        # Names ALWAYS come from top-level serializer
-        first_name = data.get("first_name") or user_data.get("first_name") or ""
-        last_name = data.get("last_name") or user_data.get("last_name") or ""
-        full_name = data.get("full_name") or f"{first_name} {last_name}".strip()
+        # Always use real authenticated user instance
+        user = serializer.user
 
-        role = user_data.get("role") or data.get("role")
-        emp_id = user_data.get("emp_id") or data.get("emp_id")
-        username = user_data.get("username") or data.get("username")
+        first_name = user.first_name or ""
+        last_name = user.last_name or ""
+        full_name = f"{first_name} {last_name}".strip()
+
+        emp_id = user.emp_id
+        username = user.username
+        role = user.role
 
         return Response(
             {
