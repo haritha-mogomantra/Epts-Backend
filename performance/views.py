@@ -464,7 +464,7 @@ class PerformanceSummaryView(APIView):
         serializer = PerformanceEvaluationSerializer(result_page, many=True)
         employee_list = serializer.data
 
-        # 🔥 Ensure dynamic fields for all weeks (fix missing data for older weeks)
+        # Ensure dynamic fields for all weeks (fix missing data for older weeks)
         for idx, obj in enumerate(result_page):
             row = employee_list[idx]
 
@@ -482,6 +482,13 @@ class PerformanceSummaryView(APIView):
             row["department_name"] = (
                 obj.employee.department.name
                 if obj.employee and obj.employee.department
+                else "Not Assigned"
+            )
+
+
+            row["designation"] = (
+                obj.employee.designation
+                if obj.employee and getattr(obj.employee, "designation", None)
                 else "Not Assigned"
             )
 
@@ -665,7 +672,7 @@ class PerformanceDashboardView(APIView):
                     "employee__user__emp_id",
                     "employee__user__first_name",
                     "employee__user__last_name",
-                    "department__name",
+                    "employee__department__name",
                 )
                 .annotate(avg_score=Avg("average_score"))
                 .order_by("-avg_score")
@@ -675,7 +682,7 @@ class PerformanceDashboardView(APIView):
                 {
                     "emp_id": e["employee__user__emp_id"],
                     "name": f"{e['employee__user__first_name']} {e['employee__user__last_name']}".strip(),
-                    "department": e["department__name"],
+                    "department": e["employee__department__name"],
                     "average_score": round(e["avg_score"], 2),
                 }
                 for e in employee_scores[:3]
@@ -687,7 +694,7 @@ class PerformanceDashboardView(APIView):
                 {
                     "emp_id": e["employee__user__emp_id"],
                     "name": f"{e['employee__user__first_name']} {e['employee__user__last_name']}".strip(),
-                    "department": e["department__name"],
+                    "department": e["employee__department__name"],
                     "average_score": round(e["avg_score"], 2),
                 }
                 for e in weak_employees

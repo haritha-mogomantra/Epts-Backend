@@ -297,10 +297,19 @@ class AdminProfileView(APIView):
             return Response({"error": "Only Admins can access this API."},
                             status=status.HTTP_403_FORBIDDEN)
 
+        # AUTO-CREATE EMPLOYEE PROFILE FOR ADMIN IF MISSING
         employee = getattr(user, "employee_profile", None)
+
         if not employee:
-            return Response({"error": "Employee profile not found."},
-                            status=status.HTTP_404_NOT_FOUND)
+            # Try active department first, fallback to first available
+            dept = Department.objects.filter(is_active=True).first() or Department.objects.first()
+
+            employee = Employee.objects.create(
+                user=user,
+                role="Admin",
+                department=dept,
+                designation="Administrator"
+            )
 
         serializer = AdminProfileSerializer(employee, context={"request": request})
         data = serializer.data
@@ -319,10 +328,16 @@ class AdminProfileView(APIView):
             return Response({"error": "Only Admins can update profile."},
                             status=status.HTTP_403_FORBIDDEN)
 
+        # AUTO-CREATE EMPLOYEE PROFILE IF MISSING
         employee = getattr(user, "employee_profile", None)
         if not employee:
-            return Response({"error": "Employee profile not found."},
-                            status=status.HTTP_404_NOT_FOUND)
+            dept = Department.objects.filter(is_active=True).first() or Department.objects.first()
+            employee = Employee.objects.create(
+                user=user,
+                role="Admin",
+                department=dept,
+                designation="Administrator"
+            )
 
         serializer = AdminProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)

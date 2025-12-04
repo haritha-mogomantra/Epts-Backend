@@ -97,28 +97,30 @@ class ObtainTokenPairView(TokenObtainPairView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Success block
         data = serializer.validated_data
         user_data = data.get("user", {})
 
-        employee = Employee.objects.filter(user__emp_id=user_data.get("emp_id")).first()
+        # Names ALWAYS come from top-level serializer
+        first_name = data.get("first_name") or user_data.get("first_name") or ""
+        last_name = data.get("last_name") or user_data.get("last_name") or ""
+        full_name = data.get("full_name") or f"{first_name} {last_name}".strip()
 
-        first_name = employee.user.first_name if employee else ""
-        last_name = employee.user.last_name if employee else ""
+        role = user_data.get("role") or data.get("role")
+        emp_id = user_data.get("emp_id") or data.get("emp_id")
+        username = user_data.get("username") or data.get("username")
 
         return Response(
             {
-                "success": True,
-                "token": data.get("access"),
+                "access": data.get("access"),
                 "refresh": data.get("refresh"),
-                "role": user_data.get("role"),
-                "username": user_data.get("username"),
-                "emp_id": user_data.get("emp_id"),
 
-                # New fields for frontend header
+                "emp_id": emp_id,
+                "username": username,
+                "role": role,
+
                 "first_name": first_name,
                 "last_name": last_name,
-                "full_name": f"{first_name} {last_name}".strip(),
+                "full_name": full_name,
             },
             status=status.HTTP_200_OK,
         )

@@ -22,7 +22,7 @@ User = get_user_model()
 
 
 # ===========================================================
-# EMP ID GENERATOR (SAFE + FUTURE PROOF)
+# EMP ID GENERATOR
 # ===========================================================
 def generate_emp_id():
     with transaction.atomic():
@@ -156,7 +156,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 raise serializers.ValidationError({"detail": "Invalid credentials."})
 
 
-        # ✅ Success: Reset failed attempts and unlock if needed
+        # Success: Reset failed attempts and unlock if needed
         if hasattr(user, "reset_login_attempts"):
             user.reset_login_attempts()
         else:
@@ -171,25 +171,31 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 #"detail": "Password change required before login."
             #})
 
-        # 🕒 Update last login
+        # Update last login
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
 
-        # 🪪 Generate JWT tokens
+        # Generate JWT tokens
         refresh = self.get_token(user)
         access = refresh.access_token
 
         data = {
             "refresh": str(refresh),
             "access": str(access),
+
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "full_name": f"{user.first_name} {user.last_name}".strip(),
+
             "user": {
                 "id": user.id,
                 "emp_id": user.emp_id,
                 "username": user.username,
                 "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
                 "role": user.role,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
+                "full_name": f"{user.first_name} {user.last_name}".strip(),
                 "department": user.department.name if user.department else None,
                 "manager": user.manager.username if user.manager else None,
                 "status": user.status,
