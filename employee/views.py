@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.pagination import PageNumberPagination
 from django.db import models, transaction
 from django.db.models import Q, F, Func, Value, CharField, DateField
+from django.db.models.functions import Coalesce, Concat
 
 from .models import Department, Employee
 from .serializers import (
@@ -110,7 +111,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 # EMPLOYEE VIEWSET
 # ===========================================================
 class EmployeeViewSet(viewsets.ModelViewSet):
-    queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members").filter(is_deleted=False)
+    queryset = Employee.objects.select_related("user", "department", "manager").prefetch_related("team_members")
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = DefaultPagination
     lookup_field = "emp_id"
@@ -120,7 +121,15 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         "user__first_name", "user__last_name", "user__emp_id",
         "designation", "contact_number", "department__name"
     ]
-    ordering_fields = ["joining_sort", "user__first_name", "user__last_name", "user__emp_id", "full_name"]
+    ordering_fields = [
+        "user__emp_id",
+        "full_name",
+        "designation",
+        "project_name",
+        "manager_name",
+        "department__name",
+        "joining_sort",
+    ]
 
     def get_serializer_class(self):
         if self.action in ["create", "update", "partial_update"]:
@@ -133,7 +142,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         request = self.request
         user = request.user
-        qs = Employee.objects.select_related("user", "department", "manager").filter(is_deleted=False)
+        qs = Employee.objects.select_related("user", "department", "manager")
+
 
         role = getattr(user, "role", "")
         if role == "Manager":
@@ -167,17 +177,18 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status__iexact=status_param.strip())
 
         qs = qs.annotate(
-            full_name=models.functions.Concat(
+            full_name=Concat(
                 "user__first_name",
-                models.Value(" "),
+                Value(" "),
                 "user__last_name"
             ),
-            joining_sort=Func(
-                F("joining_date"),
-                Value("%d-%m-%Y"),
-                function="STR_TO_DATE",
-                output_field=DateField()
-            )
+            manager_name=Concat(
+                Coalesce(F("manager__user__first_name"), Value("")),
+                Value(" "),
+                Coalesce(F("manager__user__last_name"), Value("")),
+                output_field=CharField()
+            ),
+            joining_sort=F("joining_date")
         )
 
         return qs
@@ -204,8 +215,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         emp_id = self.kwargs.get("emp_id")
         try:
             return Employee.objects.select_related("user", "department", "manager").get(
-                user__emp_id__iexact=emp_id,
-                is_deleted=False
+                user__emp_id__iexact=emp_id
             )
         except Employee.DoesNotExist:
             raise NotFound(detail=f"Employee with emp_id '{emp_id}' not found.")
@@ -246,18 +256,30 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
-        emp_id = kwargs.get("emp_id")
+        employee = self.get_object()
 
-        try:
-            # Fetch even if model has custom validation
-            employee = Employee.objects.select_related("user").get(user__emp_id=emp_id, is_deleted=False)
-        except Employee.DoesNotExist:
-            return Response({"error": "Employee not found"}, status=status.HTTP_404_NOT_FOUND)
+        # 🚫 If already deleted, stop here
+        if employee.is_deleted:
+            return Response(
+                {"error": "Employee is already deleted."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Directly perform raw DB update to avoid triggering model.save()
-        Employee.objects.filter(id=employee.id).update(is_deleted=True)
+        # 🚫 If already inactive, prevent duplicate updates
+        if employee.status == "Inactive":
+            return Response({"error": "Employee is already inactive."}, status=400)
 
-        return Response({"message": "Employee deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        # 👍 Mark only inactive (NOT soft delete)
+        employee.status = "Inactive"
+
+        # Deactivate login account
+        if employee.user:
+            employee.user.is_active = False
+            employee.user.save(update_fields=["is_active"])
+
+        employee.save(update_fields=["status"])
+
+        return Response({"message": "Employee marked inactive"}, status=200)
 
 
     @action(detail=False, methods=["GET"], url_path="managers")

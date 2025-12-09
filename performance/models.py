@@ -68,8 +68,10 @@ class PerformanceEvaluation(models.Model):
     # Period Info
     # -------------------------------------------------------
     review_date = models.DateField(default=timezone.localdate)
+
     week_number = models.PositiveSmallIntegerField(default=current_week_number)
     year = models.PositiveSmallIntegerField(default=current_year)
+
     evaluation_period = models.CharField(
         max_length=120,
         blank=True,
@@ -278,13 +280,11 @@ class PerformanceEvaluation(models.Model):
     # Save Override
     # -------------------------------------------------------
     def save(self, *args, **kwargs):
-        """Auto-calculate total, average, and prevent duplicate evaluations on create."""
-
-        # Do NOT override week/year — they must come from frontend
-        if not self.week_number or not self.year:
-            iso = self.review_date.isocalendar()
-            self.week_number = iso[1]
-            self.year = iso[0]
+        """
+        DO NOT override week_number or year.
+        Frontend sends them dynamically.
+        Only calculate total score and evaluation_period.
+        """
 
         # Department fallback
         if not self.department and getattr(self.employee, "department", None):
@@ -293,12 +293,15 @@ class PerformanceEvaluation(models.Model):
         # Calculate scores
         self.calculate_total_score()
 
-        # Generate evaluation period based on selected week & year
-        start, end = get_week_range(self.year, self.week_number)
-
-        self.evaluation_period = (
-            f"Week {self.week_number} ({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
-        )
+        # Generate evaluation period using selected week/year
+        try:
+            start, end = get_week_range(self.year, self.week_number)
+            self.evaluation_period = (
+                f"Week {self.week_number} "
+                f"({start.strftime('%d %b')} - {end.strftime('%d %b %Y')})"
+            )
+        except Exception:
+            pass
 
         super().save(*args, **kwargs)
 

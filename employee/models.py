@@ -175,7 +175,7 @@ class Employee(models.Model):
         return dict(self.ROLE_CHOICES).get(self.role, "Employee")
 
     @property
-    def manager_name(self):
+    def manager_display_name(self):
         """
         Convenient property returning manager display name or the reporting_manager_name fallback.
         Useful in serializers/templates where manager may be null.

@@ -219,41 +219,32 @@ class PerformanceEvaluationSerializer(serializers.ModelSerializer):
     # ---------- CREATE ----------
     def create(self, validated_data):
         emp_id = validated_data.pop("employee_emp_id", None)
+
         from employee.models import Employee
         employee = None
 
         if emp_id:
             try:
                 employee = Employee.objects.get(emp_id=emp_id)
-                validated_data["employee"] = employee
             except Employee.DoesNotExist:
                 raise serializers.ValidationError({"employee_emp_id": f"Employee ID '{emp_id}' not found."})
 
-        # Skip duplicate check if same employee/week/year/type already exists
+        validated_data["employee"] = employee
+
+        week = validated_data.get("week_number")
+        year = validated_data.get("year")
         evaluation_type = validated_data.get("evaluation_type")
-        review_date = validated_data.get("review_date")
 
-        from datetime import date
-        import datetime
-
-        if review_date:
-            iso_year, iso_week, _ = review_date.isocalendar()
-            validated_data["year"] = iso_year
-            validated_data["week_number"] = iso_week
-
-            duplicate = (
-                PerformanceEvaluation.objects.filter(
-                    employee=employee,
-                    year=iso_year,
-                    week_number=iso_week,
-                    evaluation_type=evaluation_type,
-                ).exists()
-            )
-
-            if duplicate:
-                raise serializers.ValidationError({
-                    "duplicate": f"Evaluation already exists for {employee.emp_id} (Week {iso_week}, {iso_year}, {evaluation_type})."
-                })
+        # REAL duplicate check (correct)
+        if PerformanceEvaluation.objects.filter(
+            employee=employee,
+            week_number=week,
+            year=year,
+            evaluation_type=evaluation_type,
+        ).exists():
+            raise serializers.ValidationError({
+                "duplicate": f"Evaluation already exists for {employee.emp_id} (Week {week}, {year}, {evaluation_type})."
+            })
 
         return super().create(validated_data)
 

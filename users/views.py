@@ -17,6 +17,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from users.models import generate_strong_password
 import re
 
 from employee.models import Employee, Department
@@ -556,10 +557,7 @@ def regenerate_password(request, emp_id=None):
     if not user.is_active:
         return Response({"error": "Cannot regenerate password for inactive user."}, status=400)
 
-    # Generate a new secure temporary password
-    first_name = user.first_name or "User"
-    random_part = get_random_string(length=4, allowed_chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-    new_password = f"{first_name}@{random_part}"
+    new_password = generate_strong_password(12)
 
 
     user.set_password(new_password)

@@ -418,3 +418,73 @@ class User(AbstractBaseUser, PermissionsMixin):
         self.save(update_fields=['is_verified', 'verification_token', 'verification_token_created'])
         return True
 
+
+
+# ===========================================================
+# STRONG PASSWORD GENERATOR (Industry-Standard Rules)
+# ===========================================================
+
+import string
+import random
+import re
+
+DICTIONARY_WORDS = [
+    "password", "welcome", "qwerty", "admin", "user",
+    "test", "employee", "manager", "login"
+]
+
+
+def generate_strong_password(length=12, user_info=None):
+    """
+    Generate a strong password that meets:
+    - At least 12 characters
+    - 1 uppercase, 1 lowercase, 1 digit, 1 special char
+    - No dictionary words
+    - No repeating sequences (AAA, abcabc, 123123)
+    - No user-related details like name, username, emp_id
+    """
+    if user_info is None:
+        user_info = []
+
+    upper = string.ascii_uppercase
+    lower = string.ascii_lowercase
+    digits = string.digits
+    special = "!@#$%^&*()_-+=<>?/{}[]|"
+
+    while True:
+        # Base structure ensures minimum requirements
+        password = [
+            random.choice(upper),
+            random.choice(lower),
+            random.choice(digits),
+            random.choice(special),
+        ]
+
+        # Fill remaining characters randomly
+        all_chars = upper + lower + digits + special
+        password += random.choices(all_chars, k=length - 4)
+        random.shuffle(password)
+        password = "".join(password)
+
+        # -----------------------------
+        # RULE 1: No dictionary words
+        # -----------------------------
+        if any(word in password.lower() for word in DICTIONARY_WORDS):
+            continue
+
+        # ----------------------------------------
+        # RULE 2: No user personal info inside pwd
+        # ----------------------------------------
+        if any(str(info).lower() in password.lower() for info in user_info if info):
+            continue
+
+        # -------------------------------
+        # RULE 3: No repeating sequences
+        # -------------------------------
+        if re.search(r"(.)\1\1", password):  # AAA, !!!, 111
+            continue
+
+        if re.search(r"(.{2,})\1", password):  # abcabc, 123123
+            continue
+
+        return password

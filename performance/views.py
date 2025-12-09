@@ -323,22 +323,21 @@ class PerformanceSummaryView(APIView):
                 return Response({"error": "Invalid year"}, status=400)
 
         if req_week and req_year:
-            # Get base dataset for the week (no search yet)
-            base_qs = PerformanceEvaluation.objects.filter(
-                year=req_year,
-                week_number=req_week
-            ).select_related("employee__user", "department")
-
-            #  Compute TRUE RANK on full dataset
-            ranked = base_qs.annotate(
-                full_rank=Window(
-                    expression=DenseRank(),
-                    order_by=F("total_score").desc()
+            # Base queryset WITH TRUE RANK annotated
+            base_qs = (
+                PerformanceEvaluation.objects
+                .filter(year=req_year, week_number=req_week)
+                .select_related("employee__user", "department")
+                .annotate(
+                    full_rank=Window(
+                        expression=DenseRank(),
+                        order_by=F("total_score").desc()
+                    )
                 )
-            ).values("id", "full_rank")
+            )
 
-            # Create rank map { evaluation_id : rank }
-            rank_map = {row["id"]: row["full_rank"] for row in ranked}
+            # Rank map for injecting final rank into response
+            rank_map = {row["id"]: row["full_rank"] for row in base_qs.values("id", "full_rank")}
 
             # Apply search (DO NOT recalculate rank)
             qs = base_qs
@@ -361,6 +360,7 @@ class PerformanceSummaryView(APIView):
                 "full_name": "employee__user__first_name",
                 "total_score": "total_score",
                 "rank": "full_rank",
+                "department": "department__name",
             }
 
             db_field = SORT_MAP.get(sort_by)
@@ -403,22 +403,21 @@ class PerformanceSummaryView(APIView):
             latest_year = latest_record.year
             latest_week = latest_record.week_number
 
-            # 1️⃣ Base queryset (NO search yet)
-            base_qs = PerformanceEvaluation.objects.filter(
-                year=latest_year,
-                week_number=latest_week
-            ).select_related("employee__user", "department")
-
-            # 2️⃣ Compute TRUE RANK on full dataset
-            ranked = base_qs.annotate(
-                full_rank=Window(
-                    expression=DenseRank(),
-                    order_by=F("total_score").desc()
+            # Base queryset WITH TRUE RANK annotated
+            base_qs = (
+                PerformanceEvaluation.objects
+                .filter(year=latest_year, week_number=latest_week)
+                .select_related("employee__user", "department")
+                .annotate(
+                    full_rank=Window(
+                        expression=DenseRank(),
+                        order_by=F("total_score").desc()
+                    )
                 )
-            ).values("id", "full_rank")
+            )
 
-            # 3️⃣ Rank map
-            rank_map = {row["id"]: row["full_rank"] for row in ranked}
+            rank_map = {row["id"]: row["full_rank"] for row in base_qs.values("id", "full_rank")}
+
 
             # 4️⃣ Apply search (DO NOT recalc rank)
             qs = base_qs
@@ -441,6 +440,7 @@ class PerformanceSummaryView(APIView):
                 "full_name": "employee__user__first_name",
                 "total_score": "total_score",
                 "rank": "full_rank",
+                "department": "department__name",
             }
 
             db_field = SORT_MAP.get(sort_by)
@@ -782,16 +782,11 @@ class CheckDuplicatePerformanceAPIView(APIView):
                 status=400
             )
 
-        try:
-            employee = Employee.objects.get(user__emp_id__iexact=emp_id)
-        except Employee.DoesNotExist:
-            return Response({"error": "Employee not found"}, status=404)
 
         exists = PerformanceEvaluation.objects.filter(
-            employee=employee,
+            employee__user__emp_id__iexact=emp_id,
             week_number=week,
             year=year,
-            evaluation_type=evaluation_type
         ).exists()
 
         return Response({

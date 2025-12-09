@@ -110,8 +110,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "department", "department_name", "department_code",
             "role", "manager", "manager_name", "designation",
             "project_name",
-            "status", "joining_date", "status", "team_size",
-            "created_at", "updated_at",
+            "status", "joining_date", "status",
+            "team_size", "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
 
@@ -130,7 +130,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
         return Employee.objects.filter(manager=obj, is_deleted=False).count()
     
     def get_status(self, obj):
-        return "Inactive" if obj.is_deleted else (obj.status or "Active")
+        if obj.is_deleted:
+            return "Inactive"
+        return obj.status or "Active"
 
     # ===========================================================
     # WRITE VALIDATION (accepts emp_id or full name)
@@ -248,14 +250,13 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError("Last name is required.")
 
-        # Only alphabets
-        if not re.match(r"^[A-Za-z]+$", value):
+        # Allow alphabets and spaces
+        if not re.match(r"^[A-Za-z ]+$", value):
             raise serializers.ValidationError(
-                "Last name must contain only alphabets (A–Z)."
+                "Last name must contain only alphabets and spaces."
             )
 
         return value.title()
-
 
     def validate_dob(self, value):
         today = date.today()

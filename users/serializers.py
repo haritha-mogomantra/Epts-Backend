@@ -17,6 +17,7 @@ import re
 from datetime import datetime, date
 from employee.models import Department, Employee
 from django.db.models import Max
+from users.views import generate_strong_password
 
 User = get_user_model()
 
@@ -357,11 +358,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         # Generate Emp ID
         new_emp_id = generate_emp_id()
 
-
-        # Temporary Password
-        first_name = validated_data.get("first_name", "User").capitalize()
-        random_part = "".join(random.choices(string.ascii_letters + string.digits, k=4))
-        temp_password = f"{first_name}@{random_part}"
+        temp_password = generate_strong_password(12)
 
         # Create User
         user = User.objects.create_user(
