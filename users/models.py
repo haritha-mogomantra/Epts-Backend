@@ -136,9 +136,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     """
 
     ROLE_CHOICES = [
-        ("Admin", "Admin"),
-        ("Manager", "Manager"),
-        ("Employee", "Employee"),
+        ("admin", "Admin"),
+        ("manager", "Manager"),
+        ("employee", "Employee"),
     ]
 
     # ---------- CORE ----------
@@ -288,6 +288,10 @@ class User(AbstractBaseUser, PermissionsMixin):
         Save with safe validation: if object has a PK, run full_clean.
         If creating (no PK yet), run only light validation to avoid relationship access that requires PK.
         """
+        # Ensure role is always lowercase
+        if self.role:
+            self.role = self.role.lower()
+
         # Light validation: we can still check certain constraints without forcing FK resolution
         # For create (no PK) call full_clean but tolerant: wrap in try/except to avoid FK lookups
         if self.pk:

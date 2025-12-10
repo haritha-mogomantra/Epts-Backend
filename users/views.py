@@ -118,7 +118,7 @@ class ObtainTokenPairView(TokenObtainPairView):
 
                 "emp_id": emp_id,
                 "username": username,
-                "role": role,
+                "role": role.lower() if role else "",
 
                 "first_name": first_name,
                 "last_name": last_name,

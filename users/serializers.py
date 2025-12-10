@@ -203,7 +203,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "emp_id": user.emp_id,
                 "username": user.username,
                 "email": user.email,
-                "role": user.role,
+                "role": user.role.lower() if user.role else "",
                 "first_name": user.first_name or "",
                 "last_name": user.last_name or "",
                 "full_name": f"{user.first_name} {user.last_name}".strip(),
