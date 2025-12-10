@@ -639,17 +639,18 @@ class AdminUserListView(generics.ListAPIView):
 
 
     def get_queryset(self):
-    # Exclude deleted employees & inactive users
+        """
+        Return active users who have a NON-deleted Employee profile.
+        """
         return (
             User.objects
             .select_related("department", "employee_profile")
             .filter(
                 is_active=True,
-                employee_profile__is_deleted=False
+                employee_profile__is_deleted=False  # <-- correct related_name
             )
             .order_by("emp_id")
         )
-
 
 
     def list(self, request, *args, **kwargs):

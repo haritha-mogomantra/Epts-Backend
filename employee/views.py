@@ -13,6 +13,8 @@ from rest_framework.pagination import PageNumberPagination
 from django.db import models, transaction
 from django.db.models import Q, F, Func, Value, CharField, DateField
 from django.db.models.functions import Coalesce, Concat
+from django.db.models.functions import Coalesce, Concat, NullIf
+
 
 from .models import Department, Employee
 from .serializers import (
@@ -189,6 +191,33 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 Coalesce(F("manager__user__last_name"), Value("")),
                 output_field=CharField()
             ),
+            # ASC key → empty managers sorted LAST
+            manager_sort_key_asc=Coalesce(
+                NullIf(
+                    Concat(
+                        Coalesce(F("manager__user__first_name"), Value("")),
+                        Value(" "),
+                        Coalesce(F("manager__user__last_name"), Value("")),
+                    ),
+                    Value("")
+                ),
+                Value("ZZZZZZZZ"),    # ensures empty names go last on ASC
+                output_field=CharField()
+            ),
+
+            # DESC key → empty managers still sorted LAST
+            manager_sort_key_desc=Coalesce(
+                NullIf(
+                    Concat(
+                        Coalesce(F("manager__user__first_name"), Value("")),
+                        Value(" "),
+                        Coalesce(F("manager__user__last_name"), Value("")),
+                    ),
+                    Value("")
+                ),
+                Value("00000000"),    # ensures empty names go last on DESC
+                output_field=CharField()
+            ),
             joining_sort=F("joining_date")
         )
 
@@ -202,6 +231,24 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         """
 
         queryset = self.filter_queryset(self.get_queryset())
+
+        # ===================== CUSTOM NULLS-LAST SORTING FIX ======================
+        ordering = request.query_params.get("ordering")
+
+        if ordering == "manager_name":
+            queryset = queryset.order_by("manager_sort_key_asc")
+
+        elif ordering == "-manager_name":
+            queryset = queryset.order_by("-manager_sort_key_desc")
+
+        # ==========================================================================
+
+        # Continue normal flow
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
 
         page = self.paginate_queryset(queryset)
         if page is not None:
