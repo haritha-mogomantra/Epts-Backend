@@ -261,12 +261,20 @@ class EmployeeViewSet(viewsets.ModelViewSet):
 
     def get_object(self):
         emp_id = self.kwargs.get("emp_id")
+
+        # RULE 1 — If starts with EMP, format is always valid (NO LENGTH CHECK)
+        if emp_id.upper().startswith("EMP") and not emp_id[3:].isdigit():
+            # Example: EMP, EMP0, EMP00, EMPA → valid format but incomplete → return None
+            return None
+
+        # RULE 2 — Query actual employee table
         try:
             return Employee.objects.select_related("user", "department", "manager").get(
                 user__emp_id__iexact=emp_id
             )
         except Employee.DoesNotExist:
             raise NotFound(detail=f"Employee with emp_id '{emp_id}' not found.")
+
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):

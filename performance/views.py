@@ -792,34 +792,40 @@ class CheckDuplicatePerformanceAPIView(APIView):
         emp_id = request.query_params.get("emp_id")
         week = request.query_params.get("week")
         year = request.query_params.get("year")
-        evaluation_type = request.query_params.get("evaluation_type", "Manager")
 
+        # validate request
         if not emp_id or not week or not year:
             return Response(
                 {"error": "emp_id, week and year are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # 🔍 STEP 1 — CHECK IF EMPLOYEE EXISTS
         try:
-            week = int(week)
-            year = int(year)
-        except ValueError:
+            employee = Employee.objects.get(
+                user__emp_id__iexact=emp_id,
+                is_deleted=False
+            )
+        except Employee.DoesNotExist:
             return Response(
-                {"error": "Invalid week/year format"},
-                status=400
+                {"exists": False, "error": "EMPLOYEE_NOT_FOUND"},
+                status=status.HTTP_200_OK
             )
 
-
+        # 🔍 STEP 2 — CHECK DUPLICATE PERFORMANCE RECORD
         exists = PerformanceEvaluation.objects.filter(
-            employee__user__emp_id__iexact=emp_id,
-            week_number=week,
-            year=year,
+            employee=employee,
+            week_number=int(week),
+            year=int(year)
         ).exists()
 
-        return Response({
-            "exists": exists,
-            "message": "Duplicate record exists" if exists else "No duplicate found"
-        })
+        return Response(
+            {
+                "exists": exists,
+                "error": None
+            },
+            status=status.HTTP_200_OK
+        )
     
 
 class PerformanceByEmployeeWeekAPIView(APIView):
