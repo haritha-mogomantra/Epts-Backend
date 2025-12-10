@@ -52,6 +52,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     Avoids authenticate() to prevent FK errors.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Accept custom login field along with username
+        self.fields['login'] = serializers.CharField(required=False)
+        self.fields['password'] = serializers.CharField(required=True)
+
     username_field = "username"
     LOCK_DURATION_HOURS = 2
     LOCK_THRESHOLD = 5
@@ -70,7 +76,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         # PRIORITY LOGIN: EMP_ID → EMAIL → USERNAME
-        login_input = attrs.get("username")
+        login_input = attrs.get("login") or attrs.get("username")
         user = None
 
         # Try EMP ID first

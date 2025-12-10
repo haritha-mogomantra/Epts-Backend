@@ -131,7 +131,7 @@ class ObtainTokenPairView(TokenObtainPairView):
 # 2. REFRESH TOKEN
 # ===========================================================
 class RefreshTokenView(TokenRefreshView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 # ===========================================================
@@ -360,7 +360,7 @@ class ProfileView(APIView):
 # 6. ROLE LIST
 # ===========================================================
 class RoleListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         return Response({"roles": [r for r, _ in User.ROLE_CHOICES]}, status=200)
@@ -519,7 +519,7 @@ class UserDetailView(APIView):
 # 10. ADMIN — REGENERATE PASSWORD (Console or Email)
 # ===========================================================
 @api_view(["POST"])
-@permission_classes([AllowAny])  
+@permission_classes([IsAuthenticated])  
 @transaction.atomic
 def regenerate_password(request, emp_id=None):
     """
@@ -631,7 +631,7 @@ class AdminUserListView(generics.ListAPIView):
     """
     queryset = User.objects.select_related("department").order_by("emp_id")
     serializer_class = LoginDetailsSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     pagination_class = UserPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["username", "emp_id", "email", "first_name", "last_name", "role"]

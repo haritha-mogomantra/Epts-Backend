@@ -129,6 +129,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         "manager_name",
         "department__name",
         "joining_sort",
+        "user__email",
     ]
 
     def get_serializer_class(self):

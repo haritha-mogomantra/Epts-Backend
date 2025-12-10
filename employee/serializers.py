@@ -99,6 +99,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
     department_name = serializers.ReadOnlyField(source="department.name")
     department_code = serializers.ReadOnlyField(source="department.code")
     manager_name = serializers.SerializerMethodField(read_only=True)
+    manager_emp_id = serializers.CharField(source="manager.user.emp_id", read_only=True)
     team_size = serializers.SerializerMethodField(read_only=True)
     manager = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     status = serializers.SerializerMethodField()
@@ -108,9 +109,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
         fields = [
             "id", "user", "emp_id", "full_name", "email", "contact_number",
             "department", "department_name", "department_code",
-            "role", "manager", "manager_name", "designation",
-            "project_name",
-            "status", "joining_date", "status",
+            "role", "manager", "manager_name", "manager_emp_id",
+            "designation", "project_name",
+            "status", "joining_date",
             "team_size", "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
@@ -195,7 +196,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if instance.is_deleted:
             data["status"] = "Inactive"
 
+        data["full_name"] = data.get("full_name") or ""
+        data["department_name"] = data.get("department_name") or ""
+        data["designation"] = data.get("designation") or ""
+        data["project_name"] = data.get("project_name") or ""
+        data["manager_name"] = data.get("manager_name") or ""
+        data["emp_id"] = data.get("emp_id") or ""
+        data["status"] = data.get("status") or "Active"
+
         return data
+        
 
 
 

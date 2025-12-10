@@ -342,13 +342,27 @@ class PerformanceSummaryView(APIView):
             # Apply search (DO NOT recalculate rank)
             qs = base_qs
             search = request.query_params.get("search", "").strip()
-            if search:
+            ''' if search:
                 qs = qs.filter(
                     Q(employee__user__emp_id__icontains=search) |
                     Q(employee__user__first_name__icontains=search) |
                     Q(employee__user__last_name__icontains=search) |
                     Q(department__name__icontains=search)
-                )
+                )'''
+
+            search = search.lower()
+
+            qs = qs.filter(
+                Q(employee__user__emp_id__icontains=search) |
+                Q(employee__user__first_name__icontains=search) |
+                Q(employee__user__last_name__icontains=search) |
+                Q(employee__designation__icontains=search) |
+                Q(employee__project_name__icontains=search) |
+                Q(employee__department__name__icontains=search) |
+                Q(employee__manager__user__first_name__icontains=search) |
+                Q(employee__manager__user__last_name__icontains=search) |
+                Q(employee__status__icontains=search)
+            )
 
             # Apply sorting using TRUE rank
             sort_by = request.query_params.get("sort_by")
@@ -422,13 +436,26 @@ class PerformanceSummaryView(APIView):
             # 4️⃣ Apply search (DO NOT recalc rank)
             qs = base_qs
             search = request.query_params.get("search", "").strip()
-            if search:
+            ''' if search:
                 qs = qs.filter(
                     Q(employee__user__emp_id__icontains=search) |
                     Q(employee__user__first_name__icontains=search) |
                     Q(employee__user__last_name__icontains=search) |
                     Q(department__name__icontains=search)
-                )
+                ) '''
+            search = search.lower()
+
+            qs = qs.filter(
+                Q(employee__user__emp_id__icontains=search) |
+                Q(employee__user__first_name__icontains=search) |
+                Q(employee__user__last_name__icontains=search) |
+                Q(employee__designation__icontains=search) |
+                Q(employee__project_name__icontains=search) |
+                Q(employee__department__name__icontains=search) |
+                Q(employee__manager__user__first_name__icontains=search) |
+                Q(employee__manager__user__last_name__icontains=search) |
+                Q(employee__status__icontains=search)
+            )
 
             # 5️⃣ Sorting using TRUE rank
             sort_by = request.query_params.get("sort_by")
@@ -825,3 +852,68 @@ class PerformanceByEmployeeWeekAPIView(APIView):
 
         serializer = PerformanceEvaluationSerializer(evaluation)
         return Response(serializer.data, status=200)
+    
+
+# ===========================================================
+# GET EMPLOYEES WHO DO NOT HAVE PERFORMANCE FOR SELECTED WEEK
+# ===========================================================
+class EligiblePerformanceEmployeesAPIView(APIView):
+    """
+    Returns employees who DO NOT have a performance record for the selected week & year.
+    Used for Add Performance dropdown.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        week = request.query_params.get("week")
+        year = request.query_params.get("year")
+
+        if not week or not year:
+            return Response(
+                {"error": "Week and year are required"},
+                status=400
+            )
+
+        try:
+            week = int(week)
+            year = int(year)
+        except ValueError:
+            return Response({"error": "Invalid week/year"}, status=400)
+
+        # Employees already evaluated
+        evaluated_emp_ids = PerformanceEvaluation.objects.filter(
+            week_number=week,
+            year=year
+        ).values_list("employee__user__emp_id", flat=True)
+
+        eligible_employees = (
+            Employee.objects
+            .exclude(user__emp_id__in=evaluated_emp_ids)
+            .filter(is_deleted=False)
+            .filter(status="Active")
+            .exclude(user__role__in=["Manager", "Admin"])
+            .select_related("user", "department", "manager__user")
+        )
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            eligible_employees = eligible_employees.filter(
+                Q(user__emp_id__icontains=search) |
+                Q(user__first_name__icontains=search) |
+                Q(user__last_name__icontains=search)
+            )
+
+        data = []
+        for emp in eligible_employees:
+            data.append({
+                "emp_id": emp.user.emp_id,
+                "full_name": f"{emp.user.first_name} {emp.user.last_name}".strip(),
+                "department_name": emp.department.name if emp.department else "",
+                "manager_name": (
+                    f"{emp.manager.user.first_name} {emp.manager.user.last_name}".strip()
+                    if emp.manager and emp.manager.user else "Not Assigned"
+                )
+            })
+
+        return Response(data, status=200)
+

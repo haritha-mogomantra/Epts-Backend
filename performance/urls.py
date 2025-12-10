@@ -13,6 +13,7 @@ from .views import (
     LatestEvaluationWeekAPIView,
     CheckDuplicatePerformanceAPIView,
     PerformanceByEmployeeWeekAPIView,
+    EligiblePerformanceEmployeesAPIView,
 )
 
 router = DefaultRouter()
@@ -39,5 +40,7 @@ urlpatterns = [
     path("latest-week/", LatestEvaluationWeekAPIView.as_view(), name="latest-week"),
     path("check-duplicate/", CheckDuplicatePerformanceAPIView.as_view(), name="check-duplicate"),\
     path('performance/by-employee-week/', PerformanceByEmployeeWeekAPIView.as_view()),
+
+    path("eligible-employees/", EligiblePerformanceEmployeesAPIView.as_view()),
 
 ]
