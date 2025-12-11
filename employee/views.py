@@ -371,9 +371,11 @@ class AdminProfileView(APIView):
     def get(self, request):
         user = request.user
 
-        if getattr(user, "role", "") != "Admin":
-            return Response({"error": "Only Admins can access this API."},
-                            status=status.HTTP_403_FORBIDDEN)
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
+
 
         # AUTO-CREATE EMPLOYEE PROFILE FOR ADMIN IF MISSING
         employee = getattr(user, "employee_profile", None)
@@ -406,9 +408,11 @@ class AdminProfileView(APIView):
     def patch(self, request):
         user = request.user
 
-        if getattr(user, "role", "") != "Admin":
-            return Response({"error": "Only Admins can update profile."},
-                            status=status.HTTP_403_FORBIDDEN)
+        # User can update only their own profile
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
 
         # AUTO-CREATE EMPLOYEE PROFILE IF MISSING
         employee = getattr(user, "employee_profile", None)
@@ -441,8 +445,12 @@ class ManagerProfileView(APIView):
 
     def get(self, request):
         user = request.user
-        if getattr(user, "role", "") != "Manager":
-            return Response({"error": "Only Managers can access this API."}, status=status.HTTP_403_FORBIDDEN)
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        
         employee = getattr(user, "employee_profile", None)
         if not employee:
             return Response({"error": "Employee record not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -452,8 +460,11 @@ class ManagerProfileView(APIView):
     @transaction.atomic
     def patch(self, request):
         user = request.user
-        if getattr(user, "role", "") != "Manager":
-            return Response({"error": "Only Managers can update profile."}, status=status.HTTP_403_FORBIDDEN)
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
+
 
         employee = getattr(user, "employee_profile", None)
         if not employee:
@@ -477,8 +488,11 @@ class EmployeeProfileView(APIView):
 
     def get(self, request):
         user = request.user
-        if getattr(user, "role", "") != "Employee":
-            return Response({"error": "Only Employees can access this API."}, status=status.HTTP_403_FORBIDDEN)
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
+
 
         employee = getattr(user, "employee_profile", None)
         if not employee:
@@ -490,8 +504,11 @@ class EmployeeProfileView(APIView):
     @transaction.atomic
     def patch(self, request):
         user = request.user
-        if getattr(user, "role", "") != "Employee":
-            return Response({"error": "Only Employees can update profile."}, status=status.HTTP_403_FORBIDDEN)
+        employee = getattr(user, "employee_profile", None)
+        if not employee:
+            return Response({"error": "Profile not found for this user."},
+                            status=status.HTTP_404_NOT_FOUND)
+
 
         employee = getattr(user, "employee_profile", None)
         if not employee:
