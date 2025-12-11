@@ -217,7 +217,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(write_only=True)
     first_name = serializers.CharField(write_only=True)
     last_name = serializers.CharField(write_only=True)
-    role = serializers.ChoiceField(choices=User.ROLE_CHOICES, write_only=True)
+    role = serializers.CharField(write_only=True)
     department_code = serializers.CharField(write_only=True, required=False)
     manager = serializers.CharField(write_only=True, required=False, allow_blank=True)
     emp_id = serializers.ReadOnlyField(source="user.emp_id")
@@ -372,8 +372,12 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         last_name = validated_data.pop("last_name").strip().title()
         role = validated_data.pop("role")
 
-        if role not in ["Admin", "Manager", "Employee"]:
-            raise serializers.ValidationError({"role": f"Invalid role '{role}'."})
+        # Allow any role defined in User model dynamically
+        valid_roles = [r[1] for r in User.ROLE_CHOICES]  # Uses labels, NOT codes
+
+        if role not in valid_roles:
+            raise serializers.ValidationError({"role": f"Invalid role '{role}'. Allowed roles: {', '.join(valid_roles)}"})
+
 
         if not dept_code:
             raise serializers.ValidationError({"department_code": "Department code is required."})
