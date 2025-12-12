@@ -116,16 +116,27 @@ class ObtainTokenPairView(TokenObtainPairView):
                 "access": data.get("access"),
                 "refresh": data.get("refresh"),
 
+                # compatibility for existing frontend
                 "emp_id": emp_id,
                 "username": username,
                 "role": role.lower() if role else "",
-
                 "first_name": first_name,
                 "last_name": last_name,
                 "full_name": full_name,
+
+                # REQUIRED for frontend
+                "user": {
+                    "emp_id": emp_id,
+                    "username": username,
+                    "role": role.lower() if role else "",
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "full_name": full_name,
+                }
             },
             status=status.HTTP_200_OK,
         )
+
 
 # ===========================================================
 # 2. REFRESH TOKEN

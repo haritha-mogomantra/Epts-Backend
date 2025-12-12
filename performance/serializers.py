@@ -440,8 +440,12 @@ class PerformanceCreateUpdateSerializer(serializers.ModelSerializer):
         # Role restriction: Only Admin or Manager can evaluate
         request = self.context.get("request")
         if request and hasattr(request.user, "role"):
-            if request.user.role not in ["Admin", "Manager"]:
-                raise serializers.ValidationError({"role": "Only Admin or Manager can submit evaluations."})
+            user_role = str(request.user.role).lower()
+            if user_role not in ["admin", "manager"]:
+                raise serializers.ValidationError(
+                    {"error": "Only Admin or Manager can submit evaluations."}
+                )
+
 
         if not self.instance:
             attrs["week_number"] = week_number

@@ -62,13 +62,29 @@ class PerformanceEvaluationViewSet(viewsets.ModelViewSet):
         - If only year provided -> return whole year (all weeks).
         - If neither provided -> return latest week available in DB (year + week).
         """
+
+        # ----------------------------------------------------
+        # FIX: For detail requests (/evaluations/<id>/),
+        # DO NOT apply employee/week/year filters
+        # ----------------------------------------------------
+        if self.kwargs.get("pk"):
+            return super().get_queryset()
+
         user = self.request.user
         role = getattr(user, "role", "").lower()
         qs = super().get_queryset()
 
+        # ----------------------------------------
+        # FIX: Filter by employee when provided
+        # ----------------------------------------
+        employee_id = self.request.query_params.get("employee_id")
+        if employee_id:
+            qs = qs.filter(employee__user__emp_id=employee_id)
+
+
         # role scoping
         if role == "manager":
-            qs = qs.filter(employee__manager__user=user)
+            pass
         elif role == "employee":
             qs = qs.filter(employee__user=user)
 
@@ -494,6 +510,7 @@ class PerformanceSummaryView(APIView):
         # Ensure dynamic fields for all weeks (fix missing data for older weeks)
         for idx, obj in enumerate(result_page):
             row = employee_list[idx]
+            row["evaluation_id"] = obj.id
 
             # FIX: send both emp_id and employee_emp_id
             if obj.employee and obj.employee.user:
@@ -534,8 +551,8 @@ class PerformanceSummaryView(APIView):
             )
 
         # Inject true rank (week_rank)
-        for obj, rank in zip(employee_list, result_page):
-            obj["rank"] = rank.week_rank
+        for idx, obj in enumerate(result_page):
+            employee_list[idx]["rank"] = obj.week_rank
 
         return paginator.get_paginated_response({
             "evaluation_period": evaluation_period,
