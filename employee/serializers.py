@@ -95,13 +95,25 @@ class EmployeeSerializer(serializers.ModelSerializer):
     emp_id = serializers.ReadOnlyField(source="user.emp_id")
     full_name = serializers.SerializerMethodField(read_only=True)
     email = serializers.ReadOnlyField(source="user.email")
-    role = serializers.ReadOnlyField(source="user.role")
+    
+    role = serializers.SerializerMethodField()
+
+    def get_role(self, obj):
+        # Prefer user.role if present
+        raw = None
+        if obj.user and getattr(obj.user, "role", None):
+            raw = obj.user.role
+        else:
+            raw = getattr(obj, "role", "")
+
+        # Normalize to Title Case: employee → Employee
+        return raw.title() if isinstance(raw, str) else raw
+
     department_name = serializers.ReadOnlyField(source="department.name")
     department_code = serializers.ReadOnlyField(source="department.code")
     manager_name = serializers.SerializerMethodField(read_only=True)
     manager_emp_id = serializers.CharField(source="manager.user.emp_id", read_only=True)
     team_size = serializers.SerializerMethodField(read_only=True)
-    manager = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     status = serializers.SerializerMethodField()
 
     class Meta:
@@ -109,7 +121,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         fields = [
             "id", "user", "emp_id", "full_name", "email", "contact_number",
             "department", "department_name", "department_code",
-            "role", "manager", "manager_name", "manager_emp_id",
+            "role", "manager_name", "manager_emp_id",
             "designation", "project_name",
             "status", "joining_date",
             "team_size", "created_at", "updated_at",
@@ -370,7 +382,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
         email = validated_data.pop("email")
         first_name = validated_data.pop("first_name").strip().title()
         last_name = validated_data.pop("last_name").strip().title()
-        role = validated_data.pop("role")
+        role = validated_data.pop("role").title()
 
         # Allow any role defined in User model dynamically
         valid_roles = [r[1] for r in User.ROLE_CHOICES]  # Uses labels, NOT codes
@@ -423,7 +435,7 @@ class EmployeeCreateUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         department_code = validated_data.pop("department_code", None)
         manager_emp_id = validated_data.pop("manager", None)
-        role = validated_data.get("role", instance.role)
+        role = validated_data.get("role", instance.role).title()
 
         if department_code:
             department = Department.objects.filter(
