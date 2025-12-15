@@ -317,6 +317,8 @@ class PerformanceSummaryView(APIView):
         role = getattr(request.user, "role", "").lower()
         if role not in ["admin", "manager"]:
             return Response({"error": "Access denied."}, status=status.HTTP_403_FORBIDDEN)
+        
+        dept_name = request.query_params.get("department")
 
         # --- Read Optional Week/Year From Frontend ---
         req_week = request.query_params.get("week")
@@ -344,13 +346,20 @@ class PerformanceSummaryView(APIView):
                 PerformanceEvaluation.objects
                 .filter(year=req_year, week_number=req_week)
                 .select_related("employee__user", "department")
-                .annotate(
-                    full_rank=Window(
-                        expression=DenseRank(),
-                        order_by=F("total_score").desc()
-                    )
+            )
+
+            # ✅ APPLY DEPARTMENT FILTER FIRST
+            if dept_name and dept_name.lower() != "all":
+                base_qs = base_qs.filter(department__name=dept_name)
+
+            # ✅ THEN CALCULATE RANK
+            base_qs = base_qs.annotate(
+                full_rank=Window(
+                    expression=DenseRank(),
+                    order_by=F("total_score").desc()
                 )
             )
+
 
             # Rank map for injecting final rank into response
             rank_map = {row["id"]: row["full_rank"] for row in base_qs.values("id", "full_rank")}
@@ -438,11 +447,17 @@ class PerformanceSummaryView(APIView):
                 PerformanceEvaluation.objects
                 .filter(year=latest_year, week_number=latest_week)
                 .select_related("employee__user", "department")
-                .annotate(
-                    full_rank=Window(
-                        expression=DenseRank(),
-                        order_by=F("total_score").desc()
-                    )
+            )
+
+            # ✅ APPLY DEPARTMENT FILTER FIRST
+            if dept_name and dept_name.lower() != "all":
+                base_qs = base_qs.filter(department__name=dept_name)
+
+            # ✅ THEN CALCULATE RANK
+            base_qs = base_qs.annotate(
+                full_rank=Window(
+                    expression=DenseRank(),
+                    order_by=F("total_score").desc()
                 )
             )
 
