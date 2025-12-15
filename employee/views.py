@@ -432,7 +432,13 @@ class AdminProfileView(APIView):
         serializer = AdminProfileSerializer(employee, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = serializer.data
+
+        return Response({
+            "profile_picture_url": data.get("personal", {}).get("profile_picture_url"),
+            **data  # return original grouped sections
+        }, status=status.HTTP_200_OK)
+
 
     def put(self, request):
         return self.patch(request)
@@ -455,7 +461,12 @@ class ManagerProfileView(APIView):
         if not employee:
             return Response({"error": "Employee record not found."}, status=status.HTTP_404_NOT_FOUND)
         serializer = ManagerProfileSerializer(employee, context={"request": request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = serializer.data
+        return Response({
+            "profile_picture_url": data.get("profile_picture_url"),   # manager serializer is flat
+            **data
+        }, status=status.HTTP_200_OK)
+
 
     @transaction.atomic
     def patch(self, request):
@@ -499,7 +510,12 @@ class EmployeeProfileView(APIView):
             return Response({"error": "Employee record not found for this user."}, status=status.HTTP_404_NOT_FOUND)
 
         serializer = EmployeeProfileSerializer(employee, context={"request": request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = serializer.data
+        return Response({
+            "profile_picture_url": data.get("profile_picture_url"),
+            **data
+        }, status=status.HTTP_200_OK)
+
 
     @transaction.atomic
     def patch(self, request):
